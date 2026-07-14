@@ -1,6 +1,6 @@
 # zarrmony-snouty
 
-Snouty (AndrewGYork single-objective light-sheet, "SOLS") reader plugin for
+Snouty (single-objective light-sheet, "SOLS") reader plugin for
 [zarrmony](https://github.com/ferrinm/zarrmony). Detects a single Snouty GUI
 acquisition subdirectory (`*_ht_sols_snap` or `*_ht_sols_acquire`) and
 converts the raw skewed volume it contains to OME-NGFF 0.5:

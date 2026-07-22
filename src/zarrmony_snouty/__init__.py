@@ -6,6 +6,7 @@ also surfaced via the ``zarrmony.readers`` entry point declared in
 ``pip install zarrmony-snouty`` and zarrmony picks the plugin up automatically.
 """
 
+import os
 from pathlib import Path
 
 from zarrmony.readers.plugin import ReaderPlugin
@@ -15,9 +16,15 @@ from .match import match
 
 __all__ = ["SnoutyReader", "match", "plugin"]
 
+_MODE_ENV_VAR = "ZARRMONY_SNOUTY_MODE"
+
 
 def _open(path: Path) -> SnoutyReader:
-    return SnoutyReader(path)
+    # ReaderPlugin.open only takes a path, so mode is opted in through an env
+    # var — SnoutyReader validates the value and raises SnoutyModeError on an
+    # unknown mode.
+    mode = os.environ.get(_MODE_ENV_VAR, "raw")
+    return SnoutyReader(path, mode=mode)
 
 
 plugin = ReaderPlugin(

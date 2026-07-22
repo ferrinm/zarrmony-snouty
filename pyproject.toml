@@ -1,6 +1,6 @@
 [project]
 name = "zarrmony-snouty"
-version = "0.1.0"
+version = "0.2.0"
 description = "Snouty (AndrewGYork single-objective light-sheet) reader plugin for zarrmony."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -22,6 +22,7 @@ dependencies = [
     "tifffile>=2024.0",
     "dask>=2026.3.0",
     "numpy>=2",
+    "scipy>=1.13",
     "xarray>=2025.9.0",
 ]
 

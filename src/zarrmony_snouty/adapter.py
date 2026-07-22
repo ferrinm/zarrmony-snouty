@@ -1,6 +1,6 @@
 """Reader Protocol adapter for a single Snouty acquisition subdirectory.
 
-v0.1 handles the simplest observed shape: one ``_snap`` or ``_acquire``
+Handles the simplest observed shape: one ``_snap`` or ``_acquire``
 subdirectory with a single-position, single-timepoint, single-channel raw
 skewed volume (Z, Y, X). Everything else — multi-position (``_p<pos>.tif``
 naming), multi-timepoint (multiple ``.tif`` files), multi-channel
@@ -8,9 +8,11 @@ naming), multi-timepoint (multiple ``.tif`` files), multi-channel
 ``NotImplementedError`` subclass with a pointer at the v0.2 tracker so users
 get an actionable error rather than a silently wrong output.
 
-Deshear/traditional-view modes are intentionally out of scope for v0.1; the
-reference algorithm lives in ``snouty_folder.SnoutyFolder`` (see the
-``snouty-folder`` package by Austin Lefebvre) and will be ported in v0.2.
+Three output modes are available via the ``mode`` kwarg (default ``"raw"``
+preserves v0.1 behavior). ``"desheared"`` and ``"traditional"`` port the CPU
+paths of ``snouty_folder.SnoutyFolder`` (see Austin Lefebvre's
+``snouty-folder`` package at https://github.com/aelefebv/snouty-folder) —
+see :mod:`zarrmony_snouty._deshear`.
 """
 
 from __future__ import annotations
@@ -18,13 +20,18 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import dask
 import dask.array as da
 import tifffile
 import xarray as xr
 
+from . import _deshear
 from ._metadata import SnoutyMetadata, parse_metadata_dir
+
+Mode = Literal["raw", "desheared", "traditional"]
+_MODES: tuple[Mode, ...] = ("raw", "desheared", "traditional")
 
 
 class SnoutyError(Exception):
@@ -59,9 +66,15 @@ class SnoutyMultiChannelUnsupportedError(SnoutyError, NotImplementedError):
     """
 
 
+class SnoutyModeError(SnoutyError, ValueError):
+    """The ``mode`` kwarg (or ``ZARRMONY_SNOUTY_MODE`` env var) is not one of
+    ``raw`` / ``desheared`` / ``traditional``."""
+
+
 __all__ = [
     "SnoutyDataError",
     "SnoutyError",
+    "SnoutyModeError",
     "SnoutyMultiChannelUnsupportedError",
     "SnoutyMultiTimepointUnsupportedError",
     "SnoutyMultipositionUnsupportedError",
@@ -94,8 +107,13 @@ class SnoutyReader:
     layout_hint = "flat"
     plate_layout = None
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, mode: Mode = "raw") -> None:
+        if mode not in _MODES:
+            raise SnoutyModeError(
+                f"unknown SnoutyReader mode {mode!r}; expected one of {list(_MODES)}"
+            )
         self._dir = Path(path)
+        self._mode: Mode = mode
         self._meta: SnoutyMetadata = parse_metadata_dir(self._dir / "metadata")
         self._data_files = sorted(
             (self._dir / "data").glob("*.tif"),
@@ -118,10 +136,23 @@ class SnoutyReader:
     def xarray_dask_data(self) -> xr.DataArray:
         m = self._meta
         data_path = str(self._data_files[0])
-        delayed = dask.delayed(_read_and_crop_plane)(data_path, m.timestamp_strip_px)
+        delayed_raw = dask.delayed(_read_and_crop_plane)(data_path, m.timestamp_strip_px)
         # dtype matches the vendor's PCO output (16-bit) — same assumption
         # snouty-folder makes when writing its OME-TIFFs.
-        volume = da.from_delayed(delayed, shape=(m.size_z, m.size_y, m.size_x), dtype="uint16")
+        if self._mode == "raw":
+            shape_zyx = (m.size_z, m.size_y, m.size_x)
+            delayed_vol = delayed_raw
+        elif self._mode == "desheared":
+            shape_zyx = _deshear.desheared_shape(m.size_z, m.size_y, m.size_x, m.scan_step_size_px)
+            delayed_vol = dask.delayed(_deshear.deshear_zyx)(delayed_raw, m.scan_step_size_px)
+        else:  # traditional
+            shape_zyx = _deshear.traditional_shape(
+                m.size_z, m.size_y, m.size_x, m.scan_step_size_px, m.voxel_aspect_ratio
+            )
+            delayed_vol = dask.delayed(_deshear.traditional_zyx)(
+                delayed_raw, m.scan_step_size_px, m.voxel_aspect_ratio
+            )
+        volume = da.from_delayed(delayed_vol, shape=shape_zyx, dtype="uint16")
         # (Z, Y, X) → (T=1, C=1, Z, Y, X)
         volume = volume[None, None, :, :, :]
         return xr.DataArray(
@@ -133,11 +164,17 @@ class SnoutyReader:
     @property
     def physical_pixel_sizes(self) -> _PixelSizes:
         m = self._meta
-        # X and Y are the sample-plane pixel size. Z is the scan step, i.e.
-        # the raw skewed-Z spacing between successive slices — NOT the
-        # de-sheared/rotated orthogonal Z. Downstream tools that need real
-        # geometry will deshear (v0.2) or apply the vendor's `voxel_aspect_ratio`.
-        return _PixelSizes(X=m.sample_px_um, Y=m.sample_px_um, Z=m.scan_step_size_um)
+        # X/Y are the sample-plane pixel size in every mode. Z differs:
+        # - raw and desheared expose the vendor's scan step (deshear only
+        #   aligns axes, it does not change spacing).
+        # - traditional rotates into an orthogonal top-down view where Z
+        #   spacing becomes sample_px_um * voxel_aspect_ratio.
+        z = (
+            m.sample_px_um * m.voxel_aspect_ratio
+            if self._mode == "traditional"
+            else m.scan_step_size_um
+        )
+        return _PixelSizes(X=m.sample_px_um, Y=m.sample_px_um, Z=z)
 
     @property
     def channel_names(self) -> list[str]:

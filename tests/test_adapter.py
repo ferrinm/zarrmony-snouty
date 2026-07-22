@@ -9,8 +9,10 @@ import pytest
 import tifffile
 
 from tests.conftest import write_synthetic_snouty
+from zarrmony_snouty import _deshear
 from zarrmony_snouty.adapter import (
     SnoutyDataError,
+    SnoutyModeError,
     SnoutyMultiChannelUnsupportedError,
     SnoutyMultipositionUnsupportedError,
     SnoutyMultiTimepointUnsupportedError,
@@ -116,6 +118,88 @@ def test_empty_data_dir_raises(tmp_path: Path) -> None:
     (fixture.dir / "data" / "snap.tif").unlink()
     with pytest.raises(SnoutyDataError, match="no .tif files"):
         SnoutyReader(fixture.dir)
+
+
+def test_default_mode_is_raw(synthetic_snouty) -> None:
+    default = SnoutyReader(synthetic_snouty.dir)
+    explicit = SnoutyReader(synthetic_snouty.dir, mode="raw")
+    assert default.xarray_dask_data.shape == explicit.xarray_dask_data.shape
+    assert default.physical_pixel_sizes == explicit.physical_pixel_sizes
+
+
+def test_unknown_mode_raises(synthetic_snouty) -> None:
+    with pytest.raises(SnoutyModeError, match="unknown SnoutyReader mode"):
+        SnoutyReader(synthetic_snouty.dir, mode="rotated")  # type: ignore[arg-type]
+
+
+def test_desheared_mode_shape_and_pixel_sizes(synthetic_snouty) -> None:
+    reader = SnoutyReader(synthetic_snouty.dir, mode="desheared")
+
+    max_shift = _deshear.max_deshear_shift(
+        synthetic_snouty.scan_step_size_px, synthetic_snouty.size_z
+    )
+    xr_da = reader.xarray_dask_data
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape == (
+        1,
+        1,
+        synthetic_snouty.size_z,
+        synthetic_snouty.size_y + max_shift,
+        synthetic_snouty.size_x,
+    )
+    assert xr_da.dtype == np.uint16
+
+    # Deshear does not change spacing.
+    pps = reader.physical_pixel_sizes
+    assert pps.X == pytest.approx(synthetic_snouty.sample_px_um)
+    assert pps.Y == pytest.approx(synthetic_snouty.sample_px_um)
+    assert pps.Z == pytest.approx(synthetic_snouty.scan_step_size_um)
+
+
+def test_desheared_mode_places_planes_at_expected_y_offsets(synthetic_snouty) -> None:
+    reader = SnoutyReader(synthetic_snouty.dir, mode="desheared")
+    computed = reader.xarray_dask_data.data.compute()
+
+    for z in range(synthetic_snouty.size_z):
+        shift = int(np.rint(synthetic_snouty.scan_step_size_px * z))
+        plane = computed[0, 0, z, :, :]
+        expected_val = synthetic_snouty.value_for(z)
+        assert (plane[shift : shift + synthetic_snouty.size_y, :] == expected_val).all()
+        # Zero-padded above and below the shifted plane.
+        if shift:
+            assert (plane[:shift, :] == 0).all()
+        assert (plane[shift + synthetic_snouty.size_y :, :] == 0).all()
+
+
+def test_traditional_mode_shape_and_pixel_sizes(synthetic_snouty) -> None:
+    reader = SnoutyReader(synthetic_snouty.dir, mode="traditional")
+
+    y_rot, z_rot, x_out = _deshear.traditional_shape(
+        synthetic_snouty.size_z,
+        synthetic_snouty.size_y,
+        synthetic_snouty.size_x,
+        synthetic_snouty.scan_step_size_px,
+        synthetic_snouty.voxel_aspect_ratio,
+    )
+    xr_da = reader.xarray_dask_data
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape == (1, 1, y_rot, z_rot, x_out)
+    assert xr_da.dtype == np.uint16
+
+    pps = reader.physical_pixel_sizes
+    assert pps.X == pytest.approx(synthetic_snouty.sample_px_um)
+    assert pps.Y == pytest.approx(synthetic_snouty.sample_px_um)
+    assert pps.Z == pytest.approx(
+        synthetic_snouty.sample_px_um * synthetic_snouty.voxel_aspect_ratio
+    )
+
+
+def test_traditional_mode_computes_without_error(synthetic_snouty) -> None:
+    reader = SnoutyReader(synthetic_snouty.dir, mode="traditional")
+    computed = reader.xarray_dask_data.data.compute()
+    assert computed.dtype == np.uint16
+    # Some non-zero content should survive the rotate + crop.
+    assert computed.any()
 
 
 def test_real_tiff_shape_matches_metadata(synthetic_snouty) -> None:

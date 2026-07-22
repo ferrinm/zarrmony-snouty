@@ -66,13 +66,13 @@ because there is no OME-XML at all.
 | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Use `bioio-ome-tiff` directly                            | No OME-XML in the TIFFs; nothing for it to parse.                                                  |
 | Synthesise OME-XML from the sidecar and route to `bioio` | Round-trip through an unrelated schema adds fragility. The direct path is smaller and testable.   |
-| Depend on the reference `snouty-folder` package as a lib | Not on PyPI; hard cupy dependency in its `pyproject.toml`; we only want the algorithms, not deps. |
+| Depend on the reference [`snouty-folder`](https://github.com/aelefebv/snouty-folder) package as a lib | Not on PyPI; hard cupy dependency in its `pyproject.toml`; we only want the algorithms, not deps. |
 
 ## References
 
-- Reference implementation: [`../snouty-folder/snouty_folder/snouty_folder.py`](../../snouty-folder/snouty_folder/snouty_folder.py)
-  — Austin Lefebvre's standalone Snouty→OME-TIFF converter. `SnoutyMetadata`
-  is a direct port of its `_load_metadata`; the timestamp-strip cropping and
-  the choice of `sample_px_um`/`scan_step_size_um` for pixel sizes both
-  originate there.
+- Reference implementation: [`snouty-folder`](https://github.com/aelefebv/snouty-folder)
+  (`snouty_folder/snouty_folder.py`) — Austin Lefebvre's standalone
+  Snouty→OME-TIFF converter. `SnoutyMetadata` is a direct port of its
+  `_load_metadata`; the timestamp-strip cropping and the choice of
+  `sample_px_um`/`scan_step_size_um` for pixel sizes both originate there.
 - [zarrmony ADR-0001: reader plugin architecture](https://github.com/ferrinm/zarrmony/blob/main/docs/adr/0001-reader-plugin-architecture.md)

@@ -1,10 +1,11 @@
 """Parser for the Snouty ``metadata/<name>.txt`` key=value sidecar.
 
-Ported from ``snouty_folder.SnoutyFolder._load_metadata`` (see the pre-existing
-``snouty-folder`` reference package by Austin Lefebvre). The vendor writes a
-plain-text file, one ``key: value`` per line, with mixed value types (bool,
-int, float, tuple). This parser converts each value with ``ast.literal_eval``
-where safe and exposes the fields the adapter needs on a typed dataclass.
+Ported from ``snouty_folder.SnoutyFolder._load_metadata`` (see Austin
+Lefebvre's ``snouty-folder`` reference package at
+https://github.com/aelefebv/snouty-folder). The vendor writes a plain-text
+file, one ``key: value`` per line, with mixed value types (bool, int, float,
+tuple). This parser converts each value with ``ast.literal_eval`` where safe
+and exposes the fields the adapter needs on a typed dataclass.
 
 The 8-pixel PCO BCD timestamp row along the top of each Y slice is a hardware
 artefact of the vendor's PCO camera — every raw plane starts with an 8-px

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import numpy as np
@@ -15,9 +16,9 @@ from zarrmony_snouty.adapter import (
     SnoutyDataError,
     SnoutyModeError,
     SnoutyMultiChannelUnsupportedError,
-    SnoutyMultipositionUnsupportedError,
     SnoutyReader,
     SnoutyVolumesPerBufferUnsupportedError,
+    SnoutyXYPositionListError,
 )
 
 
@@ -78,19 +79,206 @@ def test_xarray_crops_timestamp_strip_and_preserves_content(synthetic_snouty) ->
     assert (computed != 9999).all()
 
 
-def test_multiposition_raises(tmp_path: Path) -> None:
+def test_multi_position_scene_names_use_double_underscore_suffix(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(
         tmp_path,
         subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
     )
-    # Add a second position file — enough to trip the multi-position guardrail.
-    src = fixture.dir / "data" / "snap.tif"
-    (fixture.dir / "data" / "000000_p000000.tif").write_bytes(src.read_bytes())
-    (fixture.dir / "data" / "000000_p000001.tif").write_bytes(src.read_bytes())
-    src.unlink()
+    reader = SnoutyReader(fixture.dir)
+    assert reader.scenes == [
+        f"{fixture.dir.name}__p000000",
+        f"{fixture.dir.name}__p000001",
+    ]
 
-    with pytest.raises(SnoutyMultipositionUnsupportedError, match="multi-position"):
+
+def test_single_position_scene_name_unchanged(synthetic_snouty) -> None:
+    # v0.1 backward-compat: a single-position acquisition (no _p suffix in
+    # filenames) exposes exactly one scene named after the acquisition dir.
+    reader = SnoutyReader(synthetic_snouty.dir)
+    assert reader.scenes == [synthetic_snouty.dir.name]
+
+
+def test_multi_position_set_scene_swaps_active_data(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    reader.set_scene(0)
+    assert (reader.xarray_dask_data.data.compute()[0, 0, 0, 0, 0]) == fixture.value_for(
+        z=0, t=0, p=0
+    )
+    reader.set_scene(1)
+    assert (reader.xarray_dask_data.data.compute()[0, 0, 0, 0, 0]) == fixture.value_for(
+        z=0, t=0, p=1
+    )
+
+
+def test_multi_position_shape_composes_with_multi_timepoint(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+        n_timepoints=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    assert reader.scenes == [
+        f"{fixture.dir.name}__p000000",
+        f"{fixture.dir.name}__p000001",
+    ]
+    for scene_index in range(len(reader.scenes)):
+        reader.set_scene(scene_index)
+        xr_da = reader.xarray_dask_data
+        assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+        assert xr_da.shape == (2, 1, fixture.size_z, fixture.size_y, fixture.size_x)
+
+
+def test_multi_position_content_matches_position_and_timepoint(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+        n_timepoints=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    for scene_index, p in enumerate((0, 1)):
+        reader.set_scene(scene_index)
+        computed = reader.xarray_dask_data.data.compute()
+        for t in range(fixture.n_timepoints):
+            for z in range(fixture.size_z):
+                plane = computed[t, 0, z, :, :]
+                assert (plane == fixture.value_for(z, t, p)).all()
+        assert (computed != 9999).all()
+
+
+def test_set_scene_out_of_range_raises_for_multi_position(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    with pytest.raises(IndexError):
+        reader.set_scene(2)
+    with pytest.raises(IndexError):
+        reader.set_scene(-1)
+
+
+def test_mixed_position_and_non_position_files_raises(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    # Add a stray non-position file alongside the multi-position ones —
+    # Snouty never writes this mix, but if it did we would silently drop
+    # timepoints from one of the scenes. Reject at the boundary.
+    src = fixture.dir / "data" / "000000_p000000.tif"
+    (fixture.dir / "data" / "999999.tif").write_bytes(src.read_bytes())
+    with pytest.raises(SnoutyDataError, match="mixes"):
         SnoutyReader(fixture.dir)
+
+
+def test_stage_xy_mm_populated_from_parent_position_list(tmp_path: Path) -> None:
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text("[1.5, 2.5]\n[-3.25, 4.75]\n")
+    fixture = write_synthetic_snouty(
+        session_dir,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+
+    reader.set_scene(0)
+    assert reader.xarray_dask_data.attrs == {"zarrmony": {"stage": {"xy_mm": [1.5, 2.5]}}}
+    reader.set_scene(1)
+    assert reader.xarray_dask_data.attrs == {"zarrmony": {"stage": {"xy_mm": [-3.25, 4.75]}}}
+
+
+def test_stage_xy_mm_accepts_vendor_trailing_comma_format(tmp_path: Path) -> None:
+    # The vendor's real XY_stage_position_list.txt writes each row as a
+    # Python list literal followed by a trailing comma (so the whole file
+    # reads as one comma-separated list without enclosing brackets).
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text(
+        "[0.0578, 0.0015],\n[0.1751, -0.028],\n"
+    )
+    fixture = write_synthetic_snouty(
+        session_dir,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    reader.set_scene(1)
+    assert reader.xarray_dask_data.attrs == {"zarrmony": {"stage": {"xy_mm": [0.1751, -0.028]}}}
+
+
+def test_stage_xy_mm_absent_when_parent_lacks_position_list(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    assert reader.xarray_dask_data.attrs == {}
+
+
+def test_stage_xy_mm_omitted_for_single_position_scene(tmp_path: Path) -> None:
+    # Single-position acquisitions have no explicit position index in filenames,
+    # so we don't guess which row of the XY list applies — keep attrs empty.
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text("[1.5, 2.5]\n")
+    fixture = write_synthetic_snouty(session_dir)
+    reader = SnoutyReader(fixture.dir)
+    assert reader.xarray_dask_data.attrs == {}
+
+
+def test_malformed_xy_position_list_raises(tmp_path: Path) -> None:
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text("[1.5, 2.5]\nnot a pair\n")
+    fixture = write_synthetic_snouty(
+        session_dir,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    with pytest.raises(SnoutyXYPositionListError, match="line 2"):
+        SnoutyReader(fixture.dir)
+
+
+def test_xy_position_list_wrong_arity_raises(tmp_path: Path) -> None:
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text("[1.5, 2.5, 3.5]\n[0.0, 0.0]\n")
+    fixture = write_synthetic_snouty(
+        session_dir,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    with pytest.raises(SnoutyXYPositionListError, match="expected an .x_mm, y_mm. pair"):
+        SnoutyReader(fixture.dir)
+
+
+def test_xy_position_list_shorter_than_position_index_raises(tmp_path: Path) -> None:
+    # Two positions, only one row in the list — reading scene 1 must fail
+    # rather than silently omit the attr.
+    session_dir = tmp_path / "2026-07-14_10-54-45_ht_sols_gui"
+    session_dir.mkdir()
+    (session_dir / "XY_stage_position_list.txt").write_text("[1.5, 2.5]\n")
+    fixture = write_synthetic_snouty(
+        session_dir,
+        subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
+        n_positions=2,
+    )
+    reader = SnoutyReader(fixture.dir)
+    reader.set_scene(1)
+    with pytest.raises(SnoutyXYPositionListError, match="position index 1"):
+        _ = reader.xarray_dask_data
 
 
 def test_volumes_per_buffer_greater_than_one_raises(tmp_path: Path) -> None:
@@ -313,5 +501,52 @@ def test_real_multi_timepoint_smoke() -> None:
     assert xr_da.chunks[0] == tuple([1] * n_files)
     # Materialize just the first timepoint to keep the smoke cheap.
     first = xr_da.isel(T=0).data.compute()
+    assert first.dtype == np.uint16
+    assert first.any()
+
+
+REAL_MULTI_POSITION_ENV_VAR = "ZARRMONY_SNOUTY_REAL_MULTI_POSITION_DIR"
+
+
+def test_real_multi_position_smoke() -> None:
+    """Smoke test on a real multi-position, single-channel acquisition.
+
+    Point ``ZARRMONY_SNOUTY_REAL_MULTI_POSITION_DIR`` at an
+    ``_ht_sols_acquire`` directory whose ``data/`` contains
+    ``NNNNNN_pMMMMMM.tif`` files (e.g. AC's
+    ``2026-07-14_10-54-45_000_ht_sols_acquire``: 2 positions × 2 timepoints).
+    Skipped when unset so CI and forks stay clean; kept out of the tree
+    because real acquisition paths embed colleague names and sample IDs.
+    """
+    env_path = os.environ.get(REAL_MULTI_POSITION_ENV_VAR)
+    if not env_path:
+        pytest.skip(f"{REAL_MULTI_POSITION_ENV_VAR} not set; skipping real-data smoke")
+    real_dir = Path(env_path)
+    if not real_dir.is_dir():
+        pytest.skip(f"{REAL_MULTI_POSITION_ENV_VAR}={env_path} is not a directory; skipping")
+
+    all_files = list((real_dir / "data").glob("*.tif"))
+    position_indices = sorted(
+        {
+            int(m.group(1))
+            for m in (re.search(r"_p(\d+)\.tif$", f.name, re.IGNORECASE) for f in all_files)
+            if m is not None
+        }
+    )
+    assert position_indices, (
+        f"{env_path} has no _pNNNNNN.tif files; need multi-position layout for this smoke"
+    )
+    reader = SnoutyReader(real_dir)
+    assert reader.scenes == [f"{real_dir.name}__p{i:06d}" for i in position_indices]
+
+    # Full (T, C, Z, Y, X) shape check across all scenes; materialize only the
+    # first timepoint of the first scene to keep the smoke cheap.
+    for scene_index in range(len(reader.scenes)):
+        reader.set_scene(scene_index)
+        xr_da = reader.xarray_dask_data
+        assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+        assert xr_da.shape[1] == 1  # single-channel
+    reader.set_scene(0)
+    first = reader.xarray_dask_data.isel(T=0).data.compute()
     assert first.dtype == np.uint16
     assert first.any()

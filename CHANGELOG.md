@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Multi-timepoint acquisitions** (#2). `data/` directories with more than
+  one `.tif` are concatenated along the T axis, one dask chunk per
+  timepoint. Files are ordered by mtime (equivalent to zero-padded filename
+  order for correctly-written acquisitions, matching `snouty-folder`'s
+  convention). Verified end-to-end against a T=100, single-channel real
+  acquisition.
+
+### Changed
+
+- `_read_and_crop_plane` squeezes an optional singleton C axis before
+  cropping, so tifffile-tagged `(Z, 1, Y, X)` volumes read the same as
+  bare `(Z, Y, X)` volumes.
+
+### Removed
+
+- `SnoutyMultiTimepointUnsupportedError`. The multi-file case is now
+  supported; the ``volumes_per_buffer > 1`` case has its own error (below).
+
+### Guardrails
+
+- New `SnoutyVolumesPerBufferUnsupportedError` for sidecars reporting
+  ``volumes_per_buffer > 1`` (Snouty's hardware-limited time sampling
+  packs multiple volumes into one `.tif`). The math
+  ``size_t = volumes_per_buffer * len(data_files)`` is verified against a
+  real fixture at the raw-TIFF level (frame count matches
+  ``vpb * channels * slices_per_volume``), but every real ``vpb > 1``
+  fixture we have also has multiple channels — so the composition is
+  deferred until the multi-channel path (#4) lands and can be tested
+  end-to-end.
+
 ## [0.2.0] — 2026-07-21
 
 ### Added

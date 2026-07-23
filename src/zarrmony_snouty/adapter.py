@@ -1,12 +1,17 @@
 """Reader Protocol adapter for a single Snouty acquisition subdirectory.
 
-Handles the simplest observed shape: one ``_snap`` or ``_acquire``
-subdirectory with a single-position, single-timepoint, single-channel raw
-skewed volume (Z, Y, X). Everything else — multi-position (``_p<pos>.tif``
-naming), multi-timepoint (multiple ``.tif`` files), multi-channel
-(``channels_per_slice`` with more than one entry) — raises a
-``NotImplementedError`` subclass with a pointer at the v0.2 tracker so users
-get an actionable error rather than a silently wrong output.
+Handles single-position, single-channel acquisitions with one or more
+timepoints. Multiple ``.tif`` files under ``data/`` are concatenated along
+the T axis (one dask chunk per timepoint). ``volumes_per_buffer > 1`` (the
+vendor's hardware-limited time sampling — multiple volumes stacked inside
+one ``.tif``) is a real shape verified against a fixture but not yet
+implemented because our only real fixture also has multiple channels; it
+raises ``SnoutyVolumesPerBufferUnsupportedError`` until the multi-channel
+path (#4) lands and the composition can be tested end-to-end.
+Multi-position (``_p<pos>.tif`` naming) and multi-channel
+(``channels_per_slice`` with more than one entry) raise ``NotImplementedError``
+subclasses pointing at the v0.2 trackers so users get an actionable error
+rather than a silently wrong output.
 
 Three output modes are available via the ``mode`` kwarg (default ``"raw"``
 preserves v0.1 behavior). ``"desheared"`` and ``"traditional"`` port the CPU
@@ -24,6 +29,7 @@ from typing import Literal
 
 import dask
 import dask.array as da
+import numpy as np
 import tifffile
 import xarray as xr
 
@@ -50,11 +56,16 @@ class SnoutyMultipositionUnsupportedError(SnoutyError, NotImplementedError):
     """
 
 
-class SnoutyMultiTimepointUnsupportedError(SnoutyError, NotImplementedError):
-    """The acquisition contains multiple timepoints; v0.1 handles only one.
+class SnoutyVolumesPerBufferUnsupportedError(SnoutyError, NotImplementedError):
+    """The sidecar reports ``volumes_per_buffer > 1``.
 
-    Snouty writes multi-timepoint acquisitions as multiple ``NNNNNN.tif`` files
-    (one per volume). Tracked for v0.2.
+    Snouty's hardware-limited time sampling packs multiple volumes into a
+    single ``.tif`` (frames laid out as
+    ``(volumes_per_buffer, slices_per_volume, channels, Y, X)``). The math
+    (``size_t = volumes_per_buffer * len(data_files)``) is verified against
+    real data, but our only real fixture also has multiple channels, so we
+    hold this shape off until the multi-channel path (#4) lands and the
+    composition can be tested end-to-end.
     """
 
 
@@ -76,9 +87,9 @@ __all__ = [
     "SnoutyError",
     "SnoutyModeError",
     "SnoutyMultiChannelUnsupportedError",
-    "SnoutyMultiTimepointUnsupportedError",
     "SnoutyMultipositionUnsupportedError",
     "SnoutyReader",
+    "SnoutyVolumesPerBufferUnsupportedError",
 ]
 
 
@@ -93,14 +104,21 @@ _POSITION_TIF_RE = re.compile(r"_p\d+\.tif$", re.IGNORECASE)
 
 
 def _read_and_crop_plane(path: str, timestamp_strip_px: int):
-    """Read a full Snouty volume TIFF and crop the PCO timestamp strip.
+    """Read a Snouty volume TIFF for a single timepoint and crop the PCO strip.
 
-    Snouty TIFFs are (Z, Y, X) with the top ``timestamp_strip_px`` rows of
-    every Y slice reserved for a binary-coded-decimal timestamp. Cropping it
-    matches what ``snouty-folder`` does before writing OME-TIFF.
+    tifffile may return ``(Z, Y, X)`` or ``(Z, 1, Y, X)`` depending on whether
+    the vendor tagged a singleton C axis; both squeeze to ``(Z, Y, X)``. The
+    top ``timestamp_strip_px`` rows of every Y slice hold the PCO
+    binary-coded-decimal timestamp — cropping matches what ``snouty-folder``
+    does before writing OME-TIFF.
     """
     volume = tifffile.imread(path)
-    return volume[..., timestamp_strip_px:, :]
+    volume = np.squeeze(volume)
+    if volume.ndim != 3:
+        raise SnoutyDataError(
+            f"expected a single-channel (Z, Y, X) volume in {path}; got shape {volume.shape}"
+        )
+    return volume[:, timestamp_strip_px:, :]
 
 
 class SnoutyReader:
@@ -135,30 +153,40 @@ class SnoutyReader:
     @property
     def xarray_dask_data(self) -> xr.DataArray:
         m = self._meta
-        data_path = str(self._data_files[0])
-        delayed_raw = dask.delayed(_read_and_crop_plane)(data_path, m.timestamp_strip_px)
+        shape_zyx = self._output_shape_zyx()
         # dtype matches the vendor's PCO output (16-bit) — same assumption
         # snouty-folder makes when writing its OME-TIFFs.
-        if self._mode == "raw":
-            shape_zyx = (m.size_z, m.size_y, m.size_x)
-            delayed_vol = delayed_raw
-        elif self._mode == "desheared":
-            shape_zyx = _deshear.desheared_shape(m.size_z, m.size_y, m.size_x, m.scan_step_size_px)
-            delayed_vol = dask.delayed(_deshear.deshear_zyx)(delayed_raw, m.scan_step_size_px)
-        else:  # traditional
-            shape_zyx = _deshear.traditional_shape(
-                m.size_z, m.size_y, m.size_x, m.scan_step_size_px, m.voxel_aspect_ratio
-            )
-            delayed_vol = dask.delayed(_deshear.traditional_zyx)(
-                delayed_raw, m.scan_step_size_px, m.voxel_aspect_ratio
-            )
-        volume = da.from_delayed(delayed_vol, shape=shape_zyx, dtype="uint16")
-        # (Z, Y, X) → (T=1, C=1, Z, Y, X)
-        volume = volume[None, None, :, :, :]
+        volumes = [
+            da.from_delayed(self._delayed_volume(path), shape=shape_zyx, dtype="uint16")
+            for path in self._data_files
+        ]
+        stacked = da.stack(volumes, axis=0)  # (T, Z, Y, X)
+        stacked = stacked[:, None, :, :, :]  # → (T, C=1, Z, Y, X)
         return xr.DataArray(
-            volume,
+            stacked,
             dims=("T", "C", "Z", "Y", "X"),
             coords={"C": list(m.channels)},
+        )
+
+    def _output_shape_zyx(self) -> tuple[int, int, int]:
+        m = self._meta
+        if self._mode == "raw":
+            return (m.size_z, m.size_y, m.size_x)
+        if self._mode == "desheared":
+            return _deshear.desheared_shape(m.size_z, m.size_y, m.size_x, m.scan_step_size_px)
+        return _deshear.traditional_shape(
+            m.size_z, m.size_y, m.size_x, m.scan_step_size_px, m.voxel_aspect_ratio
+        )
+
+    def _delayed_volume(self, path: Path):
+        m = self._meta
+        raw = dask.delayed(_read_and_crop_plane)(str(path), m.timestamp_strip_px)
+        if self._mode == "raw":
+            return raw
+        if self._mode == "desheared":
+            return dask.delayed(_deshear.deshear_zyx)(raw, m.scan_step_size_px)
+        return dask.delayed(_deshear.traditional_zyx)(
+            raw, m.scan_step_size_px, m.voxel_aspect_ratio
         )
 
     @property
@@ -192,22 +220,19 @@ def _validate_v01_scope(data_files: list[Path], meta: SnoutyMetadata) -> None:
     if any(_POSITION_TIF_RE.search(p.name) for p in data_files):
         raise SnoutyMultipositionUnsupportedError(
             "Snouty multi-position acquisitions (files named _pNNNNNN.tif) are "
-            "not supported in zarrmony-snouty v0.1. Tracked for v0.2."
-        )
-    if len(data_files) > 1:
-        raise SnoutyMultiTimepointUnsupportedError(
-            f"Snouty multi-timepoint acquisitions ({len(data_files)} .tif files "
-            f"in data/) are not supported in zarrmony-snouty v0.1. Tracked for v0.2."
+            "not supported in zarrmony-snouty v0.2. Tracked for v0.3 (#3)."
         )
     if len(meta.channels) > 1:
         raise SnoutyMultiChannelUnsupportedError(
             f"Snouty multi-channel acquisitions "
             f"(channels_per_slice={meta.channels!r}) are not supported in "
-            "zarrmony-snouty v0.1. Tracked for v0.2."
+            "zarrmony-snouty v0.2. Tracked for v0.3 (#4)."
         )
     if meta.size_t != 1:
-        raise SnoutyMultiTimepointUnsupportedError(
-            f"volumes_per_buffer={meta.size_t} implies multi-timepoint output; "
-            "zarrmony-snouty v0.1 only handles single-volume acquisitions. "
-            "Tracked for v0.2."
+        raise SnoutyVolumesPerBufferUnsupportedError(
+            f"volumes_per_buffer={meta.size_t} packs multiple volumes into a "
+            "single .tif; this shape is understood but not yet implemented "
+            "because every real fixture with volumes_per_buffer > 1 also has "
+            "multiple channels — deferred until the multi-channel path (#4) "
+            "lands and the composition can be tested end-to-end."
         )

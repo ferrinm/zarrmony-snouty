@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -15,8 +16,8 @@ from zarrmony_snouty.adapter import (
     SnoutyModeError,
     SnoutyMultiChannelUnsupportedError,
     SnoutyMultipositionUnsupportedError,
-    SnoutyMultiTimepointUnsupportedError,
     SnoutyReader,
+    SnoutyVolumesPerBufferUnsupportedError,
 )
 
 
@@ -92,15 +93,18 @@ def test_multiposition_raises(tmp_path: Path) -> None:
         SnoutyReader(fixture.dir)
 
 
-def test_multi_timepoint_raises(tmp_path: Path) -> None:
-    fixture = write_synthetic_snouty(
-        tmp_path,
-        subdir_name="2026-07-14_10-24-15_000_ht_sols_acquire",
+def test_volumes_per_buffer_greater_than_one_raises(tmp_path: Path) -> None:
+    # Rewrite the sidecar's volumes_per_buffer to 2 — the on-disk .tif is
+    # still a single volume, but the guardrail fires on the metadata claim
+    # because we can't yet split a single-file, multi-volume buffer without
+    # multi-channel support (deferred to #4).
+    fixture = write_synthetic_snouty(tmp_path)
+    sidecar = fixture.dir / "metadata" / "snap.txt"
+    sidecar.write_text(
+        sidecar.read_text().replace("volumes_per_buffer: 1", "volumes_per_buffer: 2")
     )
-    src = fixture.dir / "data" / "snap.tif"
-    (fixture.dir / "data" / "000001.tif").write_bytes(src.read_bytes())
 
-    with pytest.raises(SnoutyMultiTimepointUnsupportedError, match="multi-timepoint"):
+    with pytest.raises(SnoutyVolumesPerBufferUnsupportedError, match="volumes_per_buffer=2"):
         SnoutyReader(fixture.dir)
 
 
@@ -210,3 +214,104 @@ def test_real_tiff_shape_matches_metadata(synthetic_snouty) -> None:
         synthetic_snouty.height_px,
         synthetic_snouty.size_x,
     )
+
+
+def test_multi_timepoint_shape_and_dtype(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(
+        tmp_path,
+        subdir_name="2026-07-14_10-24-15_000_ht_sols_acquire",
+        n_timepoints=3,
+    )
+    reader = SnoutyReader(fixture.dir)
+    xr_da = reader.xarray_dask_data
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape == (3, 1, fixture.size_z, fixture.size_y, fixture.size_x)
+    assert xr_da.dtype == np.uint16
+
+
+def test_multi_timepoint_one_dask_chunk_per_timepoint(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, n_timepoints=3)
+    reader = SnoutyReader(fixture.dir)
+    # AC: one dask chunk per timepoint. da.stack(axis=0) of three (Z,Y,X)
+    # delayeds yields T-axis chunks of (1, 1, 1) with a single chunk in every
+    # other axis.
+    chunks = reader.xarray_dask_data.data.chunks
+    assert chunks[0] == (1, 1, 1)
+    for other_axis_chunks in chunks[1:]:
+        assert len(other_axis_chunks) == 1
+
+
+def test_multi_timepoint_preserves_per_plane_content_and_order(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, n_timepoints=3)
+    reader = SnoutyReader(fixture.dir)
+    computed = reader.xarray_dask_data.data.compute()
+
+    for t in range(fixture.n_timepoints):
+        for z in range(fixture.size_z):
+            plane = computed[t, 0, z, :, :]
+            assert (plane == fixture.value_for(z, t)).all()
+    assert (computed != 9999).all()
+
+
+def test_multi_timepoint_desheared_mode(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, n_timepoints=2)
+    reader = SnoutyReader(fixture.dir, mode="desheared")
+    max_shift = _deshear.max_deshear_shift(fixture.scan_step_size_px, fixture.size_z)
+    xr_da = reader.xarray_dask_data
+    assert xr_da.shape == (2, 1, fixture.size_z, fixture.size_y + max_shift, fixture.size_x)
+    # Deshear per timepoint places planes at the same Y offsets each T.
+    computed = xr_da.data.compute()
+    for t in range(fixture.n_timepoints):
+        for z in range(fixture.size_z):
+            shift = int(np.rint(fixture.scan_step_size_px * z))
+            plane = computed[t, 0, z, :, :]
+            assert (plane[shift : shift + fixture.size_y, :] == fixture.value_for(z, t)).all()
+
+
+def test_multi_timepoint_ordering_uses_mtime_matching_filename_order(tmp_path: Path) -> None:
+    # snouty-folder sorts by mtime; zero-padded filenames make mtime and
+    # filename orders equivalent for correctly-written acquisitions. Confirm
+    # our reader agrees with filename order (i.e. 000000 → t=0, 000001 → t=1).
+    fixture = write_synthetic_snouty(tmp_path, n_timepoints=2)
+    reader = SnoutyReader(fixture.dir)
+    computed = reader.xarray_dask_data.data.compute()
+    # value_for(z=0, t=0) is distinct from value_for(z=0, t=1) — checking the
+    # first cropped Y row of z=0 pins down which file landed where.
+    assert computed[0, 0, 0, 0, 0] == fixture.value_for(0, 0)
+    assert computed[1, 0, 0, 0, 0] == fixture.value_for(0, 1)
+
+
+REAL_MULTI_T_ENV_VAR = "ZARRMONY_SNOUTY_REAL_MULTI_T_DIR"
+
+
+def test_real_multi_timepoint_smoke() -> None:
+    """Smoke test on a real single-channel, single-position, multi-timepoint acquisition.
+
+    Point ``ZARRMONY_SNOUTY_REAL_MULTI_T_DIR`` at any ``_ht_sols_acquire``
+    directory with ``channels_per_slice: ('<one>',)``, no ``_pNNNNNN`` files,
+    ``volumes_per_buffer: 1``, and more than one ``.tif`` under ``data/``.
+    Skipped when unset so CI and forks stay clean; kept out of the tree
+    because real acquisition paths embed colleague names and sample IDs.
+
+    The AC's named fixture (``2026-07-14_10-24-15_000_ht_sols_acquire``) is
+    multi-channel, so its full ``(T, C, Z, Y, X)`` smoke waits on #4.
+    """
+    env_path = os.environ.get(REAL_MULTI_T_ENV_VAR)
+    if not env_path:
+        pytest.skip(f"{REAL_MULTI_T_ENV_VAR} not set; skipping real-data smoke")
+    real_dir = Path(env_path)
+    if not real_dir.is_dir():
+        pytest.skip(f"{REAL_MULTI_T_ENV_VAR}={env_path} is not a directory; skipping")
+
+    reader = SnoutyReader(real_dir)
+    xr_da = reader.xarray_dask_data
+    n_files = len(list((real_dir / "data").glob("*.tif")))
+    assert n_files > 1, f"{env_path} has only {n_files} .tif file(s); need >1 for multi-T smoke"
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape[0] == n_files
+    assert xr_da.shape[1] == 1
+    assert xr_da.chunks[0] == tuple([1] * n_files)
+    # Materialize just the first timepoint to keep the smoke cheap.
+    first = xr_da.isel(T=0).data.compute()
+    assert first.dtype == np.uint16
+    assert first.any()

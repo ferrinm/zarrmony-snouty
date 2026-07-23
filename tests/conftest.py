@@ -1,10 +1,12 @@
 """Synthetic Snouty acquisition-subdirectory fixture.
 
 Writes the minimal on-disk shape the adapter reads: a directory named
-``<ts>_000_ht_sols_snap/`` containing ``data/snap.tif`` (a real 16-bit
-``(Z, Y, X)`` volume written with ``tifffile``) and ``metadata/snap.txt``
-mirroring the vendor's key=value sidecar. Every plane is filled with a
-distinct value so per-plane asserts can check both shape and content.
+``<ts>_000_ht_sols_snap/`` containing one or more 16-bit ``(Z, Y, X)``
+volume TIFFs under ``data/`` (written with ``tifffile``) and one
+``metadata/*.txt`` per volume mirroring the vendor's key=value sidecar.
+Every plane is filled with a distinct value that encodes both its
+timepoint and z index so per-plane asserts can check crop boundaries,
+Z ordering, and T ordering without relying on all-zeros arrays.
 """
 
 from __future__ import annotations
@@ -31,18 +33,22 @@ class SnoutyFixture:
     scan_step_size_um: float
     voxel_aspect_ratio: float
     scan_step_size_px: float
+    n_timepoints: int = 1
 
-    def value_for(self, z: int) -> int:
-        # Distinct per-plane fill so adapter tests can check the crop boundary
-        # and Z ordering without relying on all-zeros arrays.
-        return z + 1
+    def value_for(self, z: int, t: int = 0) -> int:
+        # Distinct per-plane fill so adapter tests can check the crop boundary,
+        # Z ordering, and (for multi-file fixtures) T ordering without relying
+        # on all-zeros arrays. 1000 * (t + 1) leaves plenty of room for both
+        # small-Z and small-T fixtures without overlapping the timestamp
+        # sentinel (9999).
+        return 1000 * (t + 1) + z + 1
 
 
-def _sidecar_text(fixture: SnoutyFixture) -> str:
+def _sidecar_text(fixture: SnoutyFixture, filename: str) -> str:
     lines = [
         "Date: 2026-07-14",
         "Time: 10:15:35",
-        "filename: snap.tif",
+        f"filename: {filename}",
         f"folder_name: {fixture.dir.parent.name}\\{fixture.dir.name}",
         f"channels_per_slice: {fixture.channels!r}",
         f"height_px: {fixture.height_px}",
@@ -72,9 +78,13 @@ def write_synthetic_snouty(
     scan_step_size_um: float = 2.14,
     voxel_aspect_ratio: float = 9.997,
     scan_step_size_px: float = 7.0,
+    n_timepoints: int = 1,
 ) -> SnoutyFixture:
     """Write a synthetic Snouty subdirectory under ``root``.
 
+    With ``n_timepoints > 1`` writes multiple ``NNNNNN.tif`` + ``NNNNNN.txt``
+    pairs (matching the vendor's ``_acquire`` multi-timepoint layout), each
+    with a distinct per-(z, t) pixel fill so tests can prove T ordering.
     Returns a ``SnoutyFixture`` with everything a test needs to assert against.
     """
     subdir = root / subdir_name
@@ -94,20 +104,24 @@ def write_synthetic_snouty(
         scan_step_size_um=scan_step_size_um,
         voxel_aspect_ratio=voxel_aspect_ratio,
         scan_step_size_px=scan_step_size_px,
+        n_timepoints=n_timepoints,
     )
 
-    volume = np.zeros((size_z, height_px, size_x), dtype=np.uint16)
-    for z in range(size_z):
-        # Timestamp strip at the top rows — filled with a sentinel so tests can
-        # confirm it gets cropped and never surfaces to callers.
-        volume[z, :TIMESTAMP_STRIP_PX, :] = 9999
-        volume[z, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z)
-    # photometric="minisblack" silences a future-default deprecation warning in
-    # tifffile for small (small_dim, ..., 8) test arrays that its heuristic
-    # currently interprets as RGB planes.
-    tifffile.imwrite(subdir / "data" / "snap.tif", volume, photometric="minisblack")
-
-    (subdir / "metadata" / "snap.txt").write_text(_sidecar_text(fixture))
+    for t in range(n_timepoints):
+        # Single-timepoint fixtures keep the historical ``snap.tif`` name so
+        # legacy tests that grep the filename still work.
+        stem = "snap" if n_timepoints == 1 else f"{t:06d}"
+        volume = np.zeros((size_z, height_px, size_x), dtype=np.uint16)
+        for z in range(size_z):
+            # Timestamp strip at the top rows — filled with a sentinel so tests
+            # can confirm it gets cropped and never surfaces to callers.
+            volume[z, :TIMESTAMP_STRIP_PX, :] = 9999
+            volume[z, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t)
+        # photometric="minisblack" silences a future-default deprecation
+        # warning in tifffile for small (small_dim, ..., 8) test arrays that
+        # its heuristic currently interprets as RGB planes.
+        tifffile.imwrite(subdir / "data" / f"{stem}.tif", volume, photometric="minisblack")
+        (subdir / "metadata" / f"{stem}.txt").write_text(_sidecar_text(fixture, f"{stem}.tif"))
 
     return fixture
 

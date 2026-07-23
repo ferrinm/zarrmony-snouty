@@ -27,6 +27,7 @@ This pulls `zarrmony` from PyPI as a transitive dependency.
 
 ```python
 from zarrmony.readers.plugin import list_plugins
+
 print([p.name for p in list_plugins()])
 # -> [..., 'zarrmony-snouty']
 ```

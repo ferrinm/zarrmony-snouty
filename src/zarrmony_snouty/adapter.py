@@ -1,17 +1,24 @@
 """Reader Protocol adapter for a single Snouty acquisition subdirectory.
 
-Handles single-position, single-channel acquisitions with one or more
-timepoints. Multiple ``.tif`` files under ``data/`` are concatenated along
-the T axis (one dask chunk per timepoint). ``volumes_per_buffer > 1`` (the
-vendor's hardware-limited time sampling — multiple volumes stacked inside
-one ``.tif``) is a real shape verified against a fixture but not yet
-implemented because our only real fixture also has multiple channels; it
-raises ``SnoutyVolumesPerBufferUnsupportedError`` until the multi-channel
-path (#4) lands and the composition can be tested end-to-end.
-Multi-position (``_p<pos>.tif`` naming) and multi-channel
-(``channels_per_slice`` with more than one entry) raise ``NotImplementedError``
-subclasses pointing at the v0.2 trackers so users get an actionable error
-rather than a silently wrong output.
+Handles single- and multi-position, single-channel acquisitions with one or
+more timepoints. Files under ``data/`` are grouped by position (the
+``MMMMMM`` in ``NNNNNN_pMMMMMM.tif``) into one scene per position; within
+each scene, files are concatenated along the T axis (one dask chunk per
+timepoint). Single-position acquisitions (no ``_pNNNNNN.tif`` files) expose
+one scene named after the acquisition directory, preserving v0.1 behavior.
+Multi-position acquisitions expose scenes named
+``<acquisition-dir>__p<zero-padded-index>`` (the double underscore is the
+intentional boundary separator so the suffix does not collide with the
+vendor's single-underscore filename fragments).
+
+``volumes_per_buffer > 1`` (the vendor's hardware-limited time sampling —
+multiple volumes stacked inside one ``.tif``) is a real shape verified
+against a fixture but not yet implemented because our only real fixture
+also has multiple channels; it raises
+``SnoutyVolumesPerBufferUnsupportedError`` until the multi-channel path
+(#4) lands and the composition can be tested end-to-end. Multi-channel
+(``channels_per_slice`` with more than one entry) raises
+``SnoutyMultiChannelUnsupportedError`` for the same reason.
 
 Three output modes are available via the ``mode`` kwarg (default ``"raw"``
 preserves v0.1 behavior). ``"desheared"`` and ``"traditional"`` port the CPU
@@ -22,6 +29,7 @@ see :mod:`zarrmony_snouty._deshear`.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,15 +53,8 @@ class SnoutyError(Exception):
 
 
 class SnoutyDataError(SnoutyError):
-    """The acquisition directory has no readable data files."""
-
-
-class SnoutyMultipositionUnsupportedError(SnoutyError, NotImplementedError):
-    """The acquisition contains multiple stage positions; v0.1 handles only one.
-
-    Snouty writes multi-position acquisitions as ``NNNNNN_pMMMMMM.tif`` files
-    (position index in the ``_p...`` segment). Tracked for v0.2.
-    """
+    """The acquisition directory has no readable data files, or the files
+    mix multi-position (``_pNNNNNN.tif``) and non-position naming."""
 
 
 class SnoutyVolumesPerBufferUnsupportedError(SnoutyError, NotImplementedError):
@@ -70,10 +71,10 @@ class SnoutyVolumesPerBufferUnsupportedError(SnoutyError, NotImplementedError):
 
 
 class SnoutyMultiChannelUnsupportedError(SnoutyError, NotImplementedError):
-    """The acquisition uses more than one channel; v0.1 handles only one.
+    """The acquisition uses more than one channel; v0.2 handles only one.
 
     ``channels_per_slice`` in the metadata sidecar lists more than one label.
-    Tracked for v0.2.
+    Tracked for v0.3 (#4).
     """
 
 
@@ -82,14 +83,19 @@ class SnoutyModeError(SnoutyError, ValueError):
     ``raw`` / ``desheared`` / ``traditional``."""
 
 
+class SnoutyXYPositionListError(SnoutyError, ValueError):
+    """The parent GUI-session directory's ``XY_stage_position_list.txt`` is
+    malformed (unparseable line, wrong arity, or non-numeric values)."""
+
+
 __all__ = [
     "SnoutyDataError",
     "SnoutyError",
     "SnoutyModeError",
     "SnoutyMultiChannelUnsupportedError",
-    "SnoutyMultipositionUnsupportedError",
     "SnoutyReader",
     "SnoutyVolumesPerBufferUnsupportedError",
+    "SnoutyXYPositionListError",
 ]
 
 
@@ -100,7 +106,8 @@ class _PixelSizes:
     Z: float | None
 
 
-_POSITION_TIF_RE = re.compile(r"_p\d+\.tif$", re.IGNORECASE)
+_POSITION_TIF_RE = re.compile(r"^(?P<t>\d+)_p(?P<p>\d+)\.tif$", re.IGNORECASE)
+_XY_POSITION_LIST_FILENAME = "XY_stage_position_list.txt"
 
 
 def _read_and_crop_plane(path: str, timestamp_strip_px: int):
@@ -133,32 +140,44 @@ class SnoutyReader:
         self._dir = Path(path)
         self._mode: Mode = mode
         self._meta: SnoutyMetadata = parse_metadata_dir(self._dir / "metadata")
-        self._data_files = sorted(
+        all_files = sorted(
             (self._dir / "data").glob("*.tif"),
             key=lambda p: p.stat().st_mtime,
         )
-        if not self._data_files:
+        if not all_files:
             raise SnoutyDataError(f"no .tif files in {self._dir / 'data'}")
 
-        _validate_v01_scope(self._data_files, self._meta)
+        _validate_v01_scope(self._meta)
 
-        self.scenes: list[str] = [self._dir.name]
+        # Group by position index; None means a non-``_p`` (legacy single-position) file.
+        self._scenes_files: list[tuple[int | None, list[Path]]] = _group_by_position(
+            all_files, self._dir / "data"
+        )
+        if len(self._scenes_files) == 1 and self._scenes_files[0][0] is None:
+            self.scenes: list[str] = [self._dir.name]
+        else:
+            self.scenes = [f"{self._dir.name}__p{i:06d}" for i, _ in self._scenes_files]
+
+        self._xy_positions = _load_xy_position_list(self._dir.parent / _XY_POSITION_LIST_FILENAME)
         self._active = 0
 
     def set_scene(self, index: int) -> None:
-        if index != 0:
-            raise IndexError(f"scene index {index} out of range; only scene 0 exists")
-        self._active = 0
+        if not 0 <= index < len(self.scenes):
+            raise IndexError(
+                f"scene index {index} out of range; valid indices are 0..{len(self.scenes) - 1}"
+            )
+        self._active = index
 
     @property
     def xarray_dask_data(self) -> xr.DataArray:
         m = self._meta
         shape_zyx = self._output_shape_zyx()
+        position_index, files = self._scenes_files[self._active]
         # dtype matches the vendor's PCO output (16-bit) — same assumption
         # snouty-folder makes when writing its OME-TIFFs.
         volumes = [
             da.from_delayed(self._delayed_volume(path), shape=shape_zyx, dtype="uint16")
-            for path in self._data_files
+            for path in files
         ]
         stacked = da.stack(volumes, axis=0)  # (T, Z, Y, X)
         stacked = stacked[:, None, :, :, :]  # → (T, C=1, Z, Y, X)
@@ -166,7 +185,20 @@ class SnoutyReader:
             stacked,
             dims=("T", "C", "Z", "Y", "X"),
             coords={"C": list(m.channels)},
+            attrs=self._scene_attrs(position_index),
         )
+
+    def _scene_attrs(self, position_index: int | None) -> dict:
+        if self._xy_positions is None or position_index is None:
+            return {}
+        if position_index >= len(self._xy_positions):
+            raise SnoutyXYPositionListError(
+                f"{self._dir.parent / _XY_POSITION_LIST_FILENAME} has "
+                f"{len(self._xy_positions)} entries but position index "
+                f"{position_index} is referenced by {self._dir / 'data'}"
+            )
+        x_mm, y_mm = self._xy_positions[position_index]
+        return {"zarrmony": {"stage": {"xy_mm": [x_mm, y_mm]}}}
 
     def _output_shape_zyx(self) -> tuple[int, int, int]:
         m = self._meta
@@ -216,12 +248,75 @@ class SnoutyReader:
         pass
 
 
-def _validate_v01_scope(data_files: list[Path], meta: SnoutyMetadata) -> None:
-    if any(_POSITION_TIF_RE.search(p.name) for p in data_files):
-        raise SnoutyMultipositionUnsupportedError(
-            "Snouty multi-position acquisitions (files named _pNNNNNN.tif) are "
-            "not supported in zarrmony-snouty v0.2. Tracked for v0.3 (#3)."
+def _group_by_position(files: list[Path], data_dir: Path) -> list[tuple[int | None, list[Path]]]:
+    """Group ``.tif`` files by position index encoded in ``NNNNNN_pMMMMMM.tif``.
+
+    Files that do not match the pattern are grouped under ``None`` (legacy
+    single-position shape). Mixing the two shapes in a single ``data/`` dir
+    is rejected as a hard error — Snouty never writes such a mix, and letting
+    it slide would silently drop timepoints from one of the scenes.
+    """
+    by_position: dict[int | None, list[Path]] = {}
+    for f in files:
+        match = _POSITION_TIF_RE.match(f.name)
+        key = int(match.group("p")) if match is not None else None
+        by_position.setdefault(key, []).append(f)
+
+    if None in by_position and len(by_position) > 1:
+        raise SnoutyDataError(
+            f"{data_dir} mixes multi-position (_pNNNNNN.tif) and non-position "
+            "files; refusing to guess how they map to scenes"
         )
+    if None in by_position:
+        return [(None, by_position[None])]
+    # Sort by numeric position index so scene order is stable and matches the
+    # XY_stage_position_list row order.
+    return sorted(by_position.items(), key=lambda item: item[0])
+
+
+def _load_xy_position_list(path: Path) -> list[tuple[float, float]] | None:
+    """Parse the vendor's ``XY_stage_position_list.txt`` into a
+    position-index-ordered list of ``(x_mm, y_mm)`` tuples.
+
+    The vendor writes each row as a Python list literal followed by a
+    trailing comma (so the whole file is one comma-separated Python list
+    without the enclosing brackets), e.g.::
+
+        [0.0578, 0.0015],
+        [0.1751, -0.028],
+
+    We accept that shape and also the trailing-comma-free form. Returns
+    ``None`` when the file is absent; raises on malformed content.
+    """
+    if not path.is_file():
+        return None
+    positions: list[tuple[float, float]] = []
+    for lineno, raw_line in enumerate(path.read_text().splitlines(), start=1):
+        # Strip trailing comma so the vendor's line-per-row format parses as a
+        # standalone [x, y] literal rather than a 1-tuple wrapping the list.
+        line = raw_line.strip().rstrip(",").strip()
+        if not line:
+            continue
+        try:
+            xy = ast.literal_eval(line)
+        except (ValueError, SyntaxError) as exc:
+            raise SnoutyXYPositionListError(
+                f"{path} line {lineno}: cannot parse {line!r} as an [x_mm, y_mm] pair: {exc}"
+            ) from exc
+        if not isinstance(xy, (list, tuple)) or len(xy) != 2:
+            raise SnoutyXYPositionListError(
+                f"{path} line {lineno}: expected an [x_mm, y_mm] pair, got {xy!r}"
+            )
+        try:
+            positions.append((float(xy[0]), float(xy[1])))
+        except (TypeError, ValueError) as exc:
+            raise SnoutyXYPositionListError(
+                f"{path} line {lineno}: non-numeric coordinate in {xy!r}: {exc}"
+            ) from exc
+    return positions
+
+
+def _validate_v01_scope(meta: SnoutyMetadata) -> None:
     if len(meta.channels) > 1:
         raise SnoutyMultiChannelUnsupportedError(
             f"Snouty multi-channel acquisitions "

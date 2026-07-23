@@ -15,6 +15,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   order for correctly-written acquisitions, matching `snouty-folder`'s
   convention). Verified end-to-end against a T=100, single-channel real
   acquisition.
+- **Multi-position acquisitions** (#3). Files named `NNNNNN_pMMMMMM.tif`
+  are grouped by position index into one scene per position. Composes with
+  multi-timepoint: each scene is `(T, C, Z, Y, X)` where T is the number
+  of files sharing that position index. Scene names follow a
+  *suffix-only-when-needed* rule to preserve v0.1 backward compatibility:
+  single-position acquisitions expose `[<acquisition-dir>]` (unchanged);
+  multi-position acquisitions expose `[<acquisition-dir>__p000000, …]`
+  (double underscore is the intentional boundary separator).
+- **Per-scene stage XY coordinates.** When the parent GUI-session
+  directory contains `XY_stage_position_list.txt` (one `[x_mm, y_mm]` row
+  per position), each multi-position scene surfaces its coordinates as
+  `attrs.zarrmony.stage.xy_mm` on the returned xarray. Absent file: attr
+  omitted. Malformed file (unparseable line, wrong arity, non-numeric
+  values, or fewer rows than positions): `SnoutyXYPositionListError`.
 
 ### Changed
 
@@ -26,6 +40,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - `SnoutyMultiTimepointUnsupportedError`. The multi-file case is now
   supported; the ``volumes_per_buffer > 1`` case has its own error (below).
+- `SnoutyMultipositionUnsupportedError`. Multi-position acquisitions are
+  now supported natively; the `_pNNNNNN.tif` pattern no longer raises.
 
 ### Guardrails
 

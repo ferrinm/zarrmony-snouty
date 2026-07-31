@@ -15,7 +15,6 @@ from zarrmony_snouty import _deshear
 from zarrmony_snouty.adapter import (
     SnoutyDataError,
     SnoutyModeError,
-    SnoutyMultiChannelUnsupportedError,
     SnoutyReader,
     SnoutyVolumesPerBufferUnsupportedError,
     SnoutyXYPositionListError,
@@ -296,13 +295,97 @@ def test_volumes_per_buffer_greater_than_one_raises(tmp_path: Path) -> None:
         SnoutyReader(fixture.dir)
 
 
-def test_multi_channel_raises(tmp_path: Path) -> None:
-    fixture = write_synthetic_snouty(
-        tmp_path,
-        channels=("488", "561"),
+def test_multi_channel_shape_and_channel_names(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
+    reader = SnoutyReader(fixture.dir)
+    xr_da = reader.xarray_dask_data
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape == (1, 2, fixture.size_z, fixture.size_y, fixture.size_x)
+    assert reader.channel_names == ["488", "561"]
+    assert list(xr_da.coords["C"].values) == ["488", "561"]
+
+
+def test_multi_channel_content_ordering(tmp_path: Path) -> None:
+    # Distinct per-(z, c) fills prove the C axis aligns with channels_per_slice
+    # order (i.e. the (Z, C, Y, X) → (C, Z, Y, X) swap in _read_and_crop_plane
+    # is correct). If the axes were swapped or transposed, the fills would
+    # land at the wrong (c, z) positions.
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
+    reader = SnoutyReader(fixture.dir)
+    computed = reader.xarray_dask_data.data.compute()
+    for c in range(len(fixture.channels)):
+        for z in range(fixture.size_z):
+            plane = computed[0, c, z, :, :]
+            assert (plane == fixture.value_for(z, c=c)).all()
+    assert (computed != 9999).all()
+
+
+def test_multi_channel_desheared_shape_and_content(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
+    reader = SnoutyReader(fixture.dir, mode="desheared")
+    max_shift = _deshear.max_deshear_shift(fixture.scan_step_size_px, fixture.size_z)
+    xr_da = reader.xarray_dask_data
+    assert xr_da.shape == (
+        1,
+        2,
+        fixture.size_z,
+        fixture.size_y + max_shift,
+        fixture.size_x,
     )
-    with pytest.raises(SnoutyMultiChannelUnsupportedError, match="multi-channel"):
-        SnoutyReader(fixture.dir)
+    computed = xr_da.data.compute()
+    for c in range(len(fixture.channels)):
+        for z in range(fixture.size_z):
+            shift = int(np.rint(fixture.scan_step_size_px * z))
+            plane = computed[0, c, z, :, :]
+            expected_val = fixture.value_for(z, c=c)
+            assert (plane[shift : shift + fixture.size_y, :] == expected_val).all()
+
+
+def test_multi_channel_traditional_computes(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
+    reader = SnoutyReader(fixture.dir, mode="traditional")
+    y_rot, z_rot, x_out = _deshear.traditional_shape(
+        fixture.size_z,
+        fixture.size_y,
+        fixture.size_x,
+        fixture.scan_step_size_px,
+        fixture.voxel_aspect_ratio,
+    )
+    xr_da = reader.xarray_dask_data
+    assert xr_da.shape == (1, 2, y_rot, z_rot, x_out)
+    computed = xr_da.data.compute()
+    assert computed.dtype == np.uint16
+    # Both channels should have some non-zero content after rotate + crop.
+    assert computed[0, 0].any()
+    assert computed[0, 1].any()
+
+
+def test_multi_channel_multi_timepoint(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"), n_timepoints=2)
+    reader = SnoutyReader(fixture.dir)
+    xr_da = reader.xarray_dask_data
+    assert xr_da.shape == (2, 2, fixture.size_z, fixture.size_y, fixture.size_x)
+    computed = xr_da.data.compute()
+    for t in range(fixture.n_timepoints):
+        for c in range(len(fixture.channels)):
+            for z in range(fixture.size_z):
+                plane = computed[t, c, z, :, :]
+                assert (plane == fixture.value_for(z, t=t, c=c)).all()
+
+
+def test_multi_channel_multi_position(tmp_path: Path) -> None:
+    fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"), n_positions=2)
+    reader = SnoutyReader(fixture.dir)
+    assert reader.scenes == [f"{fixture.dir.name}__p000000", f"{fixture.dir.name}__p000001"]
+    for p in range(fixture.n_positions):
+        reader.set_scene(p)
+        xr_da = reader.xarray_dask_data
+        assert xr_da.shape == (1, 2, fixture.size_z, fixture.size_y, fixture.size_x)
+        computed = xr_da.data.compute()
+        for c in range(len(fixture.channels)):
+            for z in range(fixture.size_z):
+                plane = computed[0, c, z, :, :]
+                assert (plane == fixture.value_for(z, p=p, c=c)).all()
 
 
 def test_empty_data_dir_raises(tmp_path: Path) -> None:
@@ -550,3 +633,44 @@ def test_real_multi_position_smoke() -> None:
     first = reader.xarray_dask_data.isel(T=0).data.compute()
     assert first.dtype == np.uint16
     assert first.any()
+
+
+REAL_MULTI_CHANNEL_ENV_VAR = "ZARRMONY_SNOUTY_REAL_MULTI_CHANNEL_DIR"
+
+
+def test_real_multi_channel_smoke() -> None:
+    """Smoke test on a real multi-channel Snouty acquisition.
+
+    Point ``ZARRMONY_SNOUTY_REAL_MULTI_CHANNEL_DIR`` at an
+    ``_ht_sols_acquire`` directory whose sidecar reports
+    ``channels_per_slice`` with more than one entry (e.g. AC's
+    ``2026-07-14_10-24-15_000_ht_sols_acquire``: 2 channels × 2 timepoints,
+    ``('LED', '488')``). Confirms the C axis matches ``channels_per_slice``
+    verbatim on real data — the check the v0.2 triage said we needed a real
+    fixture for.
+
+    Skipped when unset so CI and forks stay clean; kept out of the tree
+    because real acquisition paths embed colleague names and sample IDs.
+    """
+    env_path = os.environ.get(REAL_MULTI_CHANNEL_ENV_VAR)
+    if not env_path:
+        pytest.skip(f"{REAL_MULTI_CHANNEL_ENV_VAR} not set; skipping real-data smoke")
+    real_dir = Path(env_path)
+    if not real_dir.is_dir():
+        pytest.skip(f"{REAL_MULTI_CHANNEL_ENV_VAR}={env_path} is not a directory; skipping")
+
+    reader = SnoutyReader(real_dir)
+    assert len(reader.channel_names) > 1, (
+        f"{env_path} has channels_per_slice={reader.channel_names!r}; "
+        "need >1 channel for this smoke"
+    )
+    xr_da = reader.xarray_dask_data
+    assert xr_da.dims == ("T", "C", "Z", "Y", "X")
+    assert xr_da.shape[1] == len(reader.channel_names)
+    assert list(xr_da.coords["C"].values) == reader.channel_names
+    # Materialize just the first timepoint to keep the smoke cheap.
+    first = xr_da.isel(T=0).data.compute()
+    assert first.dtype == np.uint16
+    # Each channel should carry real signal, not be an empty slot.
+    for c in range(len(reader.channel_names)):
+        assert first[c].any(), f"channel {reader.channel_names[c]!r} is all zeros"

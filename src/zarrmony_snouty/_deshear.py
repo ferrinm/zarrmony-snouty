@@ -71,8 +71,8 @@ def deshear_zyx(volume: np.ndarray, scan_step_size_px: float) -> np.ndarray:
 
     Each z-plane is shifted along Y by ``round(scan_step_size_px * z)`` into a
     freshly-zeroed output of shape :func:`desheared_shape`. Same algorithm as
-    ``snouty_folder._per_slice_cpu_deshear`` with the T/C loops elided (the
-    adapter only ever hands us a single volume in v0.2).
+    ``snouty_folder._per_slice_cpu_deshear`` with the T/C loops elided — the
+    adapter wraps this with :func:`deshear_czyx` to loop over channels.
     """
     size_z, size_y, size_x = volume.shape
     out = np.zeros(desheared_shape(size_z, size_y, size_x, scan_step_size_px), dtype=volume.dtype)
@@ -80,6 +80,14 @@ def deshear_zyx(volume: np.ndarray, scan_step_size_px: float) -> np.ndarray:
         shift = int(np.rint(scan_step_size_px * z))
         out[z, shift : shift + size_y, :] = volume[z, :, :]
     return out
+
+
+def deshear_czyx(volume: np.ndarray, scan_step_size_px: float) -> np.ndarray:
+    """Per-channel wrapper: deshear a ``(C, Z, Y, X)`` volume."""
+    return np.stack(
+        [deshear_zyx(volume[c], scan_step_size_px) for c in range(volume.shape[0])],
+        axis=0,
+    )
 
 
 def traditional_zyx(
@@ -110,6 +118,19 @@ def traditional_zyx(
     )
     rotated = np.swapaxes(rotated, 0, 1)
     return np.flip(rotated, axis=0)
+
+
+def traditional_czyx(
+    volume: np.ndarray, scan_step_size_px: float, voxel_aspect_ratio: float
+) -> np.ndarray:
+    """Per-channel wrapper: traditional-view a ``(C, Z, Y, X)`` volume."""
+    return np.stack(
+        [
+            traditional_zyx(volume[c], scan_step_size_px, voxel_aspect_ratio)
+            for c in range(volume.shape[0])
+        ],
+        axis=0,
+    )
 
 
 def _affine_matrix(rotation_angle: float, z_zoom: float) -> np.ndarray:

@@ -1,24 +1,25 @@
 """Reader Protocol adapter for a single Snouty acquisition subdirectory.
 
-Handles single- and multi-position, single-channel acquisitions with one or
-more timepoints. Files under ``data/`` are grouped by position (the
-``MMMMMM`` in ``NNNNNN_pMMMMMM.tif``) into one scene per position; within
-each scene, files are concatenated along the T axis (one dask chunk per
-timepoint). Single-position acquisitions (no ``_pNNNNNN.tif`` files) expose
-one scene named after the acquisition directory, preserving v0.1 behavior.
-Multi-position acquisitions expose scenes named
+Handles single- and multi-position, single- and multi-channel acquisitions
+with one or more timepoints. Files under ``data/`` are grouped by position
+(the ``MMMMMM`` in ``NNNNNN_pMMMMMM.tif``) into one scene per position;
+within each scene, files are concatenated along the T axis (one dask chunk
+per timepoint). Single-position acquisitions (no ``_pNNNNNN.tif`` files)
+expose one scene named after the acquisition directory, preserving v0.1
+behavior. Multi-position acquisitions expose scenes named
 ``<acquisition-dir>__p<zero-padded-index>`` (the double underscore is the
 intentional boundary separator so the suffix does not collide with the
 vendor's single-underscore filename fragments).
 
+Multi-channel volumes (``channels_per_slice`` with more than one entry) are
+laid out on disk as ``(Z, C, Y, X)`` — Z outermost, matching the swap in
+``snouty_folder.write_original_ome_tif`` — and surface with the vendor's
+channel labels in order along the C axis.
+
 ``volumes_per_buffer > 1`` (the vendor's hardware-limited time sampling —
-multiple volumes stacked inside one ``.tif``) is a real shape verified
-against a fixture but not yet implemented because our only real fixture
-also has multiple channels; it raises
-``SnoutyVolumesPerBufferUnsupportedError`` until the multi-channel path
-(#4) lands and the composition can be tested end-to-end. Multi-channel
-(``channels_per_slice`` with more than one entry) raises
-``SnoutyMultiChannelUnsupportedError`` for the same reason.
+multiple volumes stacked inside one ``.tif``) still raises
+``SnoutyVolumesPerBufferUnsupportedError``: the buffer-frame layout inside
+a single ``.tif`` has not been verified against a real fixture.
 
 Three output modes are available via the ``mode`` kwarg (default ``"raw"``
 preserves v0.1 behavior). ``"desheared"`` and ``"traditional"`` port the CPU
@@ -62,19 +63,9 @@ class SnoutyVolumesPerBufferUnsupportedError(SnoutyError, NotImplementedError):
 
     Snouty's hardware-limited time sampling packs multiple volumes into a
     single ``.tif`` (frames laid out as
-    ``(volumes_per_buffer, slices_per_volume, channels, Y, X)``). The math
-    (``size_t = volumes_per_buffer * len(data_files)``) is verified against
-    real data, but our only real fixture also has multiple channels, so we
-    hold this shape off until the multi-channel path (#4) lands and the
-    composition can be tested end-to-end.
-    """
-
-
-class SnoutyMultiChannelUnsupportedError(SnoutyError, NotImplementedError):
-    """The acquisition uses more than one channel; v0.2 handles only one.
-
-    ``channels_per_slice`` in the metadata sidecar lists more than one label.
-    Tracked for v0.3 (#4).
+    ``(volumes_per_buffer, slices_per_volume, channels, Y, X)``). We have
+    not yet staged a real ``volumes_per_buffer > 1`` fixture, so the
+    buffer-frame layout inside a single ``.tif`` remains unverified.
     """
 
 
@@ -92,7 +83,6 @@ __all__ = [
     "SnoutyDataError",
     "SnoutyError",
     "SnoutyModeError",
-    "SnoutyMultiChannelUnsupportedError",
     "SnoutyReader",
     "SnoutyVolumesPerBufferUnsupportedError",
     "SnoutyXYPositionListError",
@@ -113,19 +103,26 @@ _XY_POSITION_LIST_FILENAME = "XY_stage_position_list.txt"
 def _read_and_crop_plane(path: str, timestamp_strip_px: int):
     """Read a Snouty volume TIFF for a single timepoint and crop the PCO strip.
 
-    tifffile may return ``(Z, Y, X)`` or ``(Z, 1, Y, X)`` depending on whether
-    the vendor tagged a singleton C axis; both squeeze to ``(Z, Y, X)``. The
-    top ``timestamp_strip_px`` rows of every Y slice hold the PCO
-    binary-coded-decimal timestamp — cropping matches what ``snouty-folder``
-    does before writing OME-TIFF.
+    Always returns ``(C, Z, Y, X)``. Single-channel files come back from
+    tifffile as ``(Z, Y, X)`` or ``(Z, 1, Y, X)`` and get a C axis
+    prepended; multi-channel files come back as ``(Z, C, Y, X)`` (Z
+    outermost, matching the swap in ``snouty_folder.write_original_ome_tif``)
+    and get the leading Z↔C axes swapped. The top ``timestamp_strip_px``
+    rows of every Y slice hold the PCO binary-coded-decimal timestamp —
+    cropping matches what ``snouty-folder`` does before writing OME-TIFF.
     """
     volume = tifffile.imread(path)
-    volume = np.squeeze(volume)
-    if volume.ndim != 3:
+    if volume.ndim == 4 and volume.shape[1] == 1:
+        volume = volume[:, 0, :, :]
+    if volume.ndim == 3:
+        volume = volume[np.newaxis, :, :, :]
+    elif volume.ndim == 4:
+        volume = np.swapaxes(volume, 0, 1)
+    else:
         raise SnoutyDataError(
-            f"expected a single-channel (Z, Y, X) volume in {path}; got shape {volume.shape}"
+            f"expected a (Z, Y, X) or (Z, C, Y, X) volume in {path}; got shape {volume.shape}"
         )
-    return volume[:, timestamp_strip_px:, :]
+    return volume[:, :, timestamp_strip_px:, :]
 
 
 class SnoutyReader:
@@ -171,16 +168,15 @@ class SnoutyReader:
     @property
     def xarray_dask_data(self) -> xr.DataArray:
         m = self._meta
-        shape_zyx = self._output_shape_zyx()
+        shape_czyx = (len(m.channels),) + self._output_shape_zyx()
         position_index, files = self._scenes_files[self._active]
         # dtype matches the vendor's PCO output (16-bit) — same assumption
         # snouty-folder makes when writing its OME-TIFFs.
         volumes = [
-            da.from_delayed(self._delayed_volume(path), shape=shape_zyx, dtype="uint16")
+            da.from_delayed(self._delayed_volume(path), shape=shape_czyx, dtype="uint16")
             for path in files
         ]
-        stacked = da.stack(volumes, axis=0)  # (T, Z, Y, X)
-        stacked = stacked[:, None, :, :, :]  # → (T, C=1, Z, Y, X)
+        stacked = da.stack(volumes, axis=0)  # (T, C, Z, Y, X)
         return xr.DataArray(
             stacked,
             dims=("T", "C", "Z", "Y", "X"),
@@ -216,8 +212,8 @@ class SnoutyReader:
         if self._mode == "raw":
             return raw
         if self._mode == "desheared":
-            return dask.delayed(_deshear.deshear_zyx)(raw, m.scan_step_size_px)
-        return dask.delayed(_deshear.traditional_zyx)(
+            return dask.delayed(_deshear.deshear_czyx)(raw, m.scan_step_size_px)
+        return dask.delayed(_deshear.traditional_czyx)(
             raw, m.scan_step_size_px, m.voxel_aspect_ratio
         )
 
@@ -317,17 +313,9 @@ def _load_xy_position_list(path: Path) -> list[tuple[float, float]] | None:
 
 
 def _validate_v01_scope(meta: SnoutyMetadata) -> None:
-    if len(meta.channels) > 1:
-        raise SnoutyMultiChannelUnsupportedError(
-            f"Snouty multi-channel acquisitions "
-            f"(channels_per_slice={meta.channels!r}) are not supported in "
-            "zarrmony-snouty v0.2. Tracked for v0.3 (#4)."
-        )
     if meta.size_t != 1:
         raise SnoutyVolumesPerBufferUnsupportedError(
             f"volumes_per_buffer={meta.size_t} packs multiple volumes into a "
-            "single .tif; this shape is understood but not yet implemented "
-            "because every real fixture with volumes_per_buffer > 1 also has "
-            "multiple channels — deferred until the multi-channel path (#4) "
-            "lands and the composition can be tested end-to-end."
+            "single .tif; no real fixture has been staged to verify the "
+            "buffer-frame layout, so this shape is not yet implemented."
         )

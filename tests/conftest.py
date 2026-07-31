@@ -36,12 +36,14 @@ class SnoutyFixture:
     n_timepoints: int = 1
     n_positions: int = 1
 
-    def value_for(self, z: int, t: int = 0, p: int = 0) -> int:
+    def value_for(self, z: int, t: int = 0, p: int = 0, c: int = 0) -> int:
         # Distinct per-plane fill so adapter tests can check the crop boundary,
-        # Z / T / position ordering without relying on all-zeros arrays. The
-        # p=0 case reduces to 1000 * (t + 1) + z + 1 — same as before positions
-        # existed — so single-position tests stay byte-for-byte identical.
-        return 10000 * p + 1000 * (t + 1) + z + 1
+        # Z / T / position / C ordering without relying on all-zeros arrays.
+        # The c=0, p=0 case reduces to 1000 * (t + 1) + z + 1 — same as before
+        # channels or positions existed — so single-channel single-position
+        # tests stay byte-for-byte identical. 30000 * c keeps the fixture
+        # within uint16 for c ∈ {0, 1} at realistic z/t/p sizes.
+        return 30000 * c + 10000 * p + 1000 * (t + 1) + z + 1
 
 
 def _sidecar_text(fixture: SnoutyFixture, filename: str) -> str:
@@ -112,6 +114,7 @@ def write_synthetic_snouty(
         n_positions=n_positions,
     )
 
+    n_channels = len(channels)
     for t in range(n_timepoints):
         for p in range(n_positions):
             # Single-position, single-timepoint fixtures keep the historical
@@ -122,12 +125,22 @@ def write_synthetic_snouty(
                 stem = "snap"
             else:
                 stem = f"{t:06d}"
-            volume = np.zeros((size_z, height_px, size_x), dtype=np.uint16)
-            for z in range(size_z):
-                # Timestamp strip at the top rows — filled with a sentinel so tests
-                # can confirm it gets cropped and never surfaces to callers.
-                volume[z, :TIMESTAMP_STRIP_PX, :] = 9999
-                volume[z, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t, p)
+            if n_channels > 1:
+                # Multi-channel Snouty .tif files are laid out (Z, C, Y, X) —
+                # Z outermost — matching what tifffile parses as ZCYX and the
+                # swap in snouty_folder.write_original_ome_tif.
+                volume = np.zeros((size_z, n_channels, height_px, size_x), dtype=np.uint16)
+                for z in range(size_z):
+                    for c in range(n_channels):
+                        volume[z, c, :TIMESTAMP_STRIP_PX, :] = 9999
+                        volume[z, c, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t, p, c)
+            else:
+                volume = np.zeros((size_z, height_px, size_x), dtype=np.uint16)
+                for z in range(size_z):
+                    # Timestamp strip at the top rows — filled with a sentinel so tests
+                    # can confirm it gets cropped and never surfaces to callers.
+                    volume[z, :TIMESTAMP_STRIP_PX, :] = 9999
+                    volume[z, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t, p)
             # photometric="minisblack" silences a future-default deprecation
             # warning in tifffile for small (small_dim, ..., 8) test arrays that
             # its heuristic currently interprets as RGB planes.

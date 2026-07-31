@@ -29,12 +29,21 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `attrs.zarrmony.stage.xy_mm` on the returned xarray. Absent file: attr
   omitted. Malformed file (unparseable line, wrong arity, non-numeric
   values, or fewer rows than positions): `SnoutyXYPositionListError`.
+- **Multi-channel acquisitions** (#4). `channels_per_slice` with more than
+  one entry now yields a `(T, C=N, Z, Y, X)` xarray with the vendor's
+  channel labels along the `C` coord verbatim. On-disk TIFF layout is
+  `(Z, C, Y, X)` (Z outermost, matching the swap in
+  `snouty_folder.write_original_ome_tif`) and composes with the
+  multi-timepoint and multi-position paths. Verified end-to-end against
+  the `('LED', '488')` acquisitions in the exploratory session.
 
 ### Changed
 
-- `_read_and_crop_plane` squeezes an optional singleton C axis before
-  cropping, so tifffile-tagged `(Z, 1, Y, X)` volumes read the same as
-  bare `(Z, Y, X)` volumes.
+- `_read_and_crop_plane` now always returns `(C, Z, Y, X)`: bare
+  `(Z, Y, X)` and `(Z, 1, Y, X)` single-channel volumes get a C axis
+  prepended; `(Z, C, Y, X)` multi-channel volumes get their leading Z↔C
+  axes swapped. `xarray_dask_data` stops inserting a synthetic singleton
+  C — the C dim comes from the read path.
 
 ### Removed
 
@@ -42,18 +51,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   supported; the ``volumes_per_buffer > 1`` case has its own error (below).
 - `SnoutyMultipositionUnsupportedError`. Multi-position acquisitions are
   now supported natively; the `_pNNNNNN.tif` pattern no longer raises.
+- `SnoutyMultiChannelUnsupportedError`. `channels_per_slice` with more
+  than one entry is now supported natively.
 
 ### Guardrails
 
-- New `SnoutyVolumesPerBufferUnsupportedError` for sidecars reporting
-  ``volumes_per_buffer > 1`` (Snouty's hardware-limited time sampling
-  packs multiple volumes into one `.tif`). The math
-  ``size_t = volumes_per_buffer * len(data_files)`` is verified against a
-  real fixture at the raw-TIFF level (frame count matches
-  ``vpb * channels * slices_per_volume``), but every real ``vpb > 1``
-  fixture we have also has multiple channels — so the composition is
-  deferred until the multi-channel path (#4) lands and can be tested
-  end-to-end.
+- `SnoutyVolumesPerBufferUnsupportedError` still fires on sidecars
+  reporting ``volumes_per_buffer > 1`` (Snouty's hardware-limited time
+  sampling packs multiple volumes into one `.tif`). No real ``vpb > 1``
+  fixture has been staged, so the buffer-frame layout inside a single
+  `.tif` — expected to be
+  ``(volumes_per_buffer, slices_per_volume, channels, Y, X)`` — remains
+  unverified.
 
 ## [0.2.0] — 2026-07-21
 

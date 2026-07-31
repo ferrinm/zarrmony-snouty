@@ -9,6 +9,37 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Top-level GUI-session directory as multi-scene input** (#5). A new
+  `SnoutySessionReader` fires on `*_ht_sols_gui/` directories and composes
+  one child `SnoutyReader` per non-empty `_ht_sols_*` subdirectory. Its
+  `scenes` list is the flat concatenation of every child's scenes
+  (verbatim `<subdir>[__pNNNNNN]` names — no session-level prefix; subdir
+  names already carry the disambiguating information). `set_scene(i)`
+  resolves to the right child + per-child scene; `xarray_dask_data`,
+  `physical_pixel_sizes`, `channel_names`, `metadata` delegate to the
+  active child. Child readers are instantiated lazily — full metadata
+  parsing only happens on first `set_scene()` into a given child.
+- **`snouty-session` entry point.** The `zarrmony-snouty` distribution now
+  registers **two** `ReaderPlugin` values under `zarrmony.readers`:
+  `snouty` (subdir-level, unchanged) and `snouty-session` (session-level,
+  new). Both appear in `zarrmony.readers.plugin.list_plugins()` after
+  install.
+- **`SnoutySubdirSkippedWarning`.** Subdirs that fail a cheap shallow
+  validation (missing `data/`, missing `metadata/`, no `.tif` in `data/`,
+  no `.txt` in `metadata/`) are dropped from `scenes` with one warning
+  per skipped child. Reason tokens (`missing_data_dir`,
+  `missing_metadata_dir`, `empty_data`, `no_metadata`) are machine-parseable.
+  A session with zero surviving children raises `SnoutyDataError`.
+- **`SnoutySessionLayoutWarning`.** When the session-level
+  `XY_stage_position_list.txt` length does not match a multi-position
+  child's position count, the session reader emits one warning per
+  mismatched child and omits `attrs.zarrmony.stage.xy_mm` on that child's
+  scenes. Matched-length children pass through the same per-position
+  attr code path #3 introduced.
+- **Mode env-var propagation across the session.**
+  `ZARRMONY_SNOUTY_MODE=desheared zarrmony convert <session-dir>` deshears
+  every child in the batch; unknown values still raise `SnoutyModeError`
+  at construction time.
 - **Multi-timepoint acquisitions** (#2). `data/` directories with more than
   one `.tif` are concatenated along the T axis, one dask chunk per
   timepoint. Files are ordered by mtime (equivalent to zero-padded filename
@@ -44,6 +75,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   prepended; `(Z, C, Y, X)` multi-channel volumes get their leading Z↔C
   axes swapped. `xarray_dask_data` stops inserting a synthetic singleton
   C — the C dim comes from the read path.
+- `SnoutyReader` now exposes a `dtype` property (always `np.dtype("uint16")`,
+  matching the vendor's PCO output and the existing
+  `da.from_delayed(..., dtype="uint16")` construction). Required by
+  `zarrmony>=0.9`'s `_channels_for_scene` when computing the OME-NGFF
+  display window; without it, `zarrmony convert` errored at the first
+  scene. `SnoutySessionReader.dtype` delegates to the active child.
 
 ### Removed
 

@@ -17,7 +17,7 @@ _Avoid_: light sheet (too generic), SOPI, oblique plane microscopy.
 ### Input hierarchy (what the plugin points at)
 
 **Session**:
-A GUI-driven run, on disk as a directory whose name ends in `_ht_sols_gui/`. Contains one or more acquisitions plus the shared `XY_stage_position_list.txt` and `focus_piezo_position_list.txt`. Tracked as the v0.3 input shape.
+A GUI-driven run, on disk as a directory whose name ends in `_ht_sols_gui/`. Contains one or more acquisitions plus the shared `XY_stage_position_list.txt` and `focus_piezo_position_list.txt`. v0.3 accepts a session directory as multi-scene input — one output store per non-empty child acquisition.
 _Avoid_: batch, GUI folder, parent dir.
 
 **Acquisition**:

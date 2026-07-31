@@ -99,6 +99,14 @@ class _PixelSizes:
 _POSITION_TIF_RE = re.compile(r"^(?P<t>\d+)_p(?P<p>\d+)\.tif$", re.IGNORECASE)
 _XY_POSITION_LIST_FILENAME = "XY_stage_position_list.txt"
 
+# Sentinel for the SnoutyReader.__init__ ``xy_positions`` kwarg. Distinguishes
+# "caller did not supply a list — auto-load from ``../XY_stage_position_list.txt``"
+# (default v0.1 behavior) from "caller supplied ``None`` — omit stage attrs even
+# if the file exists". SnoutySessionReader uses the explicit override to shut
+# off attrs when the session-level list length does not match a child's
+# position count.
+_XY_POSITIONS_AUTO: object = object()
+
 
 def _read_and_crop_plane(path: str, timestamp_strip_px: int):
     """Read a Snouty volume TIFF for a single timepoint and crop the PCO strip.
@@ -129,7 +137,13 @@ class SnoutyReader:
     layout_hint = "flat"
     plate_layout = None
 
-    def __init__(self, path: Path, mode: Mode = "raw") -> None:
+    def __init__(
+        self,
+        path: Path,
+        mode: Mode = "raw",
+        *,
+        xy_positions: list[tuple[float, float]] | None | object = _XY_POSITIONS_AUTO,
+    ) -> None:
         if mode not in _MODES:
             raise SnoutyModeError(
                 f"unknown SnoutyReader mode {mode!r}; expected one of {list(_MODES)}"
@@ -155,7 +169,12 @@ class SnoutyReader:
         else:
             self.scenes = [f"{self._dir.name}__p{i:06d}" for i, _ in self._scenes_files]
 
-        self._xy_positions = _load_xy_position_list(self._dir.parent / _XY_POSITION_LIST_FILENAME)
+        if xy_positions is _XY_POSITIONS_AUTO:
+            self._xy_positions = _load_xy_position_list(
+                self._dir.parent / _XY_POSITION_LIST_FILENAME
+            )
+        else:
+            self._xy_positions = xy_positions  # type: ignore[assignment]
         self._active = 0
 
     def set_scene(self, index: int) -> None:
@@ -235,6 +254,15 @@ class SnoutyReader:
     @property
     def channel_names(self) -> list[str]:
         return [str(c) for c in self._meta.channels]
+
+    @property
+    def dtype(self) -> np.dtype:
+        # zarrmony >=0.9 reads reader.dtype in _channels_for_scene to compute
+        # the OME-NGFF display window. Snouty PCO output is always uint16 —
+        # the ``da.from_delayed(..., dtype="uint16")`` construction below is
+        # the source of truth; mirror it here without materializing the
+        # xarray_dask_data graph.
+        return np.dtype("uint16")
 
     @property
     def metadata(self) -> str:

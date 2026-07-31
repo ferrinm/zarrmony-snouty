@@ -28,6 +28,7 @@ dependencies = [
 
 [project.entry-points."zarrmony.readers"]
 snouty = "zarrmony_snouty:plugin"
+snouty-session = "zarrmony_snouty:session_plugin"
 
 [project.optional-dependencies]
 dev = [

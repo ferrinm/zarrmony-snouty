@@ -268,6 +268,27 @@ class SnoutyReader:
     def metadata(self) -> str:
         return self._meta.raw_text
 
+    @property
+    def acquisition_audit(self) -> dict:
+        """Zarrmony soft-optional hook (zarrmony issue #76): inject
+        acquisition-block fields the source Snouty TIFF has no OME surface for.
+
+        Snouty is HT-SOLS (High-Throughput Single-Objective Light-Sheet) by
+        construction — every acquisition directory the reader accepts was
+        produced by that instrument, so ``imaging_method`` is a static
+        contribution rather than a per-scene extraction. ``microscope`` names
+        the instrument family; a specific Calico instrument name (``"Snouty"``)
+        is stamped by the Aperture ingest form as ``microscope_name``, not
+        here (see ADR-0008 § microscope vs microscope_name).
+
+        Fills gaps only — zarrmony uses ``setdefault`` semantics so any key
+        the LIF/OME extractors populated wins over this dict.
+        """
+        return {
+            "imaging_method": ["light_sheet"],
+            "microscope": "HT-SOLS",
+        }
+
     def close(self) -> None:
         pass
 

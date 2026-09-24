@@ -20,7 +20,7 @@ Covers the acceptance criteria for #5:
 - Both ``zarrmony-snouty`` and ``zarrmony-snouty-session`` register via
   the ``zarrmony.readers`` entry point.
 
-A real-data smoke on ``/Volumes/HT-SOLS_v1.0-ro/.../2026-07-14_10-12-21_ht_sols_gui/``
+A real-data smoke on ``/Volumes/kingsnout_lightsheet-ro/.../2026-07-14_10-12-21_ht_sols_gui/``
 is opt-in via ``ZARRMONY_SNOUTY_REAL_SESSION_DIR`` (same pattern as the
 per-subdir real-data smokes).
 """
@@ -449,7 +449,7 @@ def test_real_session_smoke() -> None:
     """Smoke test on a real ``*_ht_sols_gui/`` GUI-session directory.
 
     Point ``ZARRMONY_SNOUTY_REAL_SESSION_DIR`` at any Snouty GUI-session
-    directory (e.g. ``/Volumes/HT-SOLS_v1.0-ro/.../2026-07-14_10-12-21_ht_sols_gui/``).
+    directory (e.g. ``/Volumes/kingsnout_lightsheet-ro/.../2026-07-14_10-12-21_ht_sols_gui/``).
     Confirms that the session reader enumerates one scene per non-empty
     ``_ht_sols_*`` subdir with ``__pNNNNNN`` suffixes on multi-position
     children, and that materializing the first timepoint of every scene

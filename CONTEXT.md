@@ -62,8 +62,25 @@ _Avoid_: skewed, as-acquired, native (vendor calls it "native" but that overload
 
 **Desheared**:
 Per-slice Y shift by `int(round(scan_step_size_px * z))`, aligning axes. Same physical pixel spacing as raw. Output shape `(Z, Y + max_shift, X)`.
-_Avoid_: shifted, unskewed, aligned.
+_Avoid_: shifted, unskewed, aligned, deskewed.
 
 **Traditional**:
 Desheared plus an affine rotation of `arctan(scan_step_size_px / voxel_aspect_ratio)` around X, then a Y/Z swap and Z flip. Produces the top-down orthogonal view with Z spacing `sample_px_um * voxel_aspect_ratio`.
-_Avoid_: orthogonal, rotated, top-down (use "traditional" to match the vendor's `_load_traditional_dims`).
+_Avoid_: orthogonal, rotated, top-down (use "traditional" to match the vendor's `_load_traditional_dims`), deskewed.
+
+**Deskew**:
+Not a term in this context. The vendor's `_affine_rotate` docstring calls the
+whole shift-plus-rotate pipeline a "deskew", which collapses two modes with very
+different costs into one word. The shift step is *desheared*. The rotate step is
+*traditional*.
+_Avoid_: deskew, deskewed, deskewing — say *desheared* or *traditional*.
+
+### Execution (v0.3 #7)
+
+**Engine**:
+The compute device a transform runs on — `cpu` or `gpu`. Chosen once when a reader opens an acquisition, never per timepoint. Only *traditional* has a GPU path.
+_Avoid_: backend, device, accelerator, mode (mode is the output geometry, engine is where it is computed).
+
+**Auto**:
+The default engine setting. Means "use the GPU if this host has one and the volume fits on it, otherwise the CPU". Not a third engine — it resolves to `cpu` or `gpu` before any pixel work starts.
+_Avoid_: default, best, hybrid.

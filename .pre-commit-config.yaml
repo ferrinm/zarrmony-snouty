@@ -5,3 +5,13 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: no-internal-paths
+        name: no internal dataset paths or identifiers
+        entry: python scripts/check_no_internal_paths.py
+        language: system
+        pass_filenames: true
+        # The checker, its tests and the convention doc all name the patterns
+        # they exist to catch, so they would flag themselves.
+        exclude: ^(scripts/check_no_internal_paths\.py|tests/test_check_no_internal_paths\.py|CONTRIBUTING\.md)$

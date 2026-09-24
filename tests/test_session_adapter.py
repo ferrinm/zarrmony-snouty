@@ -20,7 +20,7 @@ Covers the acceptance criteria for #5:
 - Both ``zarrmony-snouty`` and ``zarrmony-snouty-session`` register via
   the ``zarrmony.readers`` entry point.
 
-A real-data smoke on ``/Volumes/kingsnout_lightsheet-ro/.../2026-07-14_10-12-21_ht_sols_gui/``
+A real-data smoke on ``/mnt/readonly/<dataset>/2026-07-14_10-12-21_ht_sols_gui/``
 is opt-in via ``ZARRMONY_SNOUTY_REAL_SESSION_DIR`` (same pattern as the
 per-subdir real-data smokes).
 """
@@ -88,9 +88,7 @@ def test_children_sorted_deterministically(tmp_path: Path) -> None:
 
 def test_skips_subdir_missing_data_dir_with_warning(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    good = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    good = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     bad = session / "2026-07-14_10-22-33_000_ht_sols_acquire"
     (bad / "metadata").mkdir(parents=True)
     (bad / "metadata" / "x.txt").write_text("k: v\n")
@@ -102,9 +100,7 @@ def test_skips_subdir_missing_data_dir_with_warning(tmp_path: Path) -> None:
 
 def test_skips_subdir_missing_metadata_dir_with_warning(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    good = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    good = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     bad = session / "2026-07-14_10-22-33_000_ht_sols_acquire"
     (bad / "data").mkdir(parents=True)
     (bad / "data" / "x.tif").write_bytes(b"II*\x00")
@@ -118,9 +114,7 @@ def test_skips_subdir_with_empty_data_with_warning(tmp_path: Path) -> None:
     # Mirrors the real-data case: 2026-07-14_10-22-33_000_ht_sols_acquire in
     # the /Volumes fixture has an empty data/ dir.
     session = _make_session(tmp_path)
-    good = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    good = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     bad = session / "2026-07-14_10-22-33_000_ht_sols_acquire"
     (bad / "data").mkdir(parents=True)
     (bad / "metadata").mkdir()
@@ -134,9 +128,7 @@ def test_skips_subdir_with_empty_data_with_warning(tmp_path: Path) -> None:
 
 def test_skips_subdir_with_no_metadata_txt_with_warning(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    good = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    good = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     bad = session / "2026-07-14_10-22-33_000_ht_sols_acquire"
     (bad / "data").mkdir(parents=True)
     (bad / "metadata").mkdir()
@@ -168,9 +160,7 @@ def test_zero_children_at_all_raises_snouty_data_error(tmp_path: Path) -> None:
 
 def test_set_scene_forwards_to_correct_child_and_per_scene(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    a = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     b = write_synthetic_snouty(
         session,
         subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
@@ -245,19 +235,13 @@ def test_children_instantiated_lazily(tmp_path: Path) -> None:
     # walk should be cheap enough that we can safely open a session with a
     # broken child and only pay the cost on set_scene into that child.
     session = _make_session(tmp_path)
-    good = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    good = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     # A child whose sidecar sets volumes_per_buffer > 1 (unsupported). The
     # session reader must survive __init__ without raising — the error
     # only fires on set_scene(1).
-    bad = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-16-14_000_ht_sols_acquire"
-    )
+    bad = write_synthetic_snouty(session, subdir_name="2026-07-14_10-16-14_000_ht_sols_acquire")
     sidecar = bad.dir / "metadata" / "snap.txt"
-    text = sidecar.read_text().replace(
-        "volumes_per_buffer: 1", "volumes_per_buffer: 2"
-    )
+    text = sidecar.read_text().replace("volumes_per_buffer: 1", "volumes_per_buffer: 2")
     sidecar.write_text(text)
 
     reader = SnoutySessionReader(session)  # must not raise
@@ -274,12 +258,8 @@ def test_children_instantiated_lazily(tmp_path: Path) -> None:
 
 def test_mode_propagates_to_every_child(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    a = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
-    b = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-16-14_000_ht_sols_acquire"
-    )
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
+    b = write_synthetic_snouty(session, subdir_name="2026-07-14_10-16-14_000_ht_sols_acquire")
     reader = SnoutySessionReader(session, mode="desheared")
     from zarrmony_snouty import _deshear
 
@@ -301,9 +281,7 @@ def test_unknown_mode_raises_snouty_mode_error(tmp_path: Path) -> None:
 
 def test_open_session_reads_mode_env_var(tmp_path: Path, monkeypatch) -> None:
     session = _make_session(tmp_path)
-    a = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     monkeypatch.setenv("ZARRMONY_SNOUTY_MODE", "desheared")
     reader = _open_session(session)
     from zarrmony_snouty import _deshear
@@ -319,14 +297,10 @@ def test_open_session_reads_mode_env_var(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def test_open_session_defaults_to_raw_when_env_unset(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_open_session_defaults_to_raw_when_env_unset(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("ZARRMONY_SNOUTY_MODE", raising=False)
     session = _make_session(tmp_path)
-    a = write_synthetic_snouty(
-        session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap"
-    )
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     reader = _open_session(session)
     reader.set_scene(0)
     assert reader.xarray_dask_data.shape == (1, 1, a.size_z, a.size_y, a.size_x)
@@ -346,9 +320,7 @@ def test_open_session_rejects_unknown_mode(tmp_path: Path, monkeypatch) -> None:
 
 def test_xy_list_matching_length_surfaces_per_position_attrs(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
-    (session / "XY_stage_position_list.txt").write_text(
-        "[0.0578, 0.0015],\n[0.1751, -0.028],\n"
-    )
+    (session / "XY_stage_position_list.txt").write_text("[0.0578, 0.0015],\n[0.1751, -0.028],\n")
     b = write_synthetic_snouty(
         session,
         subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
@@ -378,18 +350,14 @@ def test_xy_list_absent_omits_attrs_silently(tmp_path: Path, recwarn) -> None:
     reader = SnoutySessionReader(session)
     reader.set_scene(0)
     assert reader.xarray_dask_data.attrs == {}
-    assert not any(
-        isinstance(w.message, SnoutySessionLayoutWarning) for w in recwarn.list
-    )
+    assert not any(isinstance(w.message, SnoutySessionLayoutWarning) for w in recwarn.list)
 
 
 def test_xy_list_mismatched_length_warns_and_omits_attrs(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     # List has 3 entries but the child has 2 positions — mismatched, session
     # reader must warn once per mismatched child and drop the attrs.
-    (session / "XY_stage_position_list.txt").write_text(
-        "[0.0, 0.0],\n[1.0, 0.0],\n[2.0, 0.0],\n"
-    )
+    (session / "XY_stage_position_list.txt").write_text("[0.0, 0.0],\n[1.0, 0.0],\n[2.0, 0.0],\n")
     write_synthetic_snouty(
         session,
         subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
@@ -413,9 +381,7 @@ def test_xy_list_ignored_for_single_position_child(tmp_path: Path, recwarn) -> N
     reader = SnoutySessionReader(session)
     reader.set_scene(0)
     assert reader.xarray_dask_data.attrs == {}
-    assert not any(
-        isinstance(w.message, SnoutySessionLayoutWarning) for w in recwarn.list
-    )
+    assert not any(isinstance(w.message, SnoutySessionLayoutWarning) for w in recwarn.list)
 
 
 # ---------------------------------------------------------------------------
@@ -449,7 +415,7 @@ def test_real_session_smoke() -> None:
     """Smoke test on a real ``*_ht_sols_gui/`` GUI-session directory.
 
     Point ``ZARRMONY_SNOUTY_REAL_SESSION_DIR`` at any Snouty GUI-session
-    directory (e.g. ``/Volumes/kingsnout_lightsheet-ro/.../2026-07-14_10-12-21_ht_sols_gui/``).
+    directory (e.g. ``/mnt/readonly/<dataset>/2026-07-14_10-12-21_ht_sols_gui/``).
     Confirms that the session reader enumerates one scene per non-empty
     ``_ht_sols_*`` subdir with ``__pNNNNNN`` suffixes on multi-position
     children, and that materializing the first timepoint of every scene

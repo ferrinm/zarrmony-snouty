@@ -34,3 +34,6 @@ Thumbs.db
 # Local Claude session state
 .claude/sessions/
 .claude/scheduled_tasks.json
+
+# Site-specific sanitize patterns (never committed)
+.internal-patterns

@@ -127,6 +127,53 @@ are ported (CPU-only) from Austin Lefebvre's
 [`snouty-folder`](https://github.com/aelefebv/snouty-folder); GPU paths are
 intentionally out of scope.
 
+### Host memory for the transform modes
+
+The reader builds one dask task per timepoint, and each task transforms a
+whole `(C, Z, Y, X)` volume. Dask's default scheduler is threaded with
+`os.cpu_count()` workers, so without a bound the host holds one whole
+transformed volume per core.
+
+Peak host memory per task, at a real acquisition geometry
+(`slices_per_volume: 411`, `height_px: 600`, `width_px: 1500`,
+`scan_step_size_px: 2`):
+
+| mode | input | intermediate | output | peak per task |
+| --- | --- | --- | --- | --- |
+| `raw` | 0.73 GB | — | — | **0.73 GB** |
+| `desheared` | 0.73 GB | — | 1.74 GB | **2.47 GB** |
+| `traditional` | 0.73 GB | 1.74 GB | 2.43 GB | **4.90 GB** |
+
+`desheared` and `traditional` therefore reserve their footprint from a
+process-wide byte budget before each transform runs. The budget is **half of
+the smaller of the cgroup memory limit and total physical RAM**. Reading the
+cgroup limit matters inside a scheduler allocation: a 62 GB SLURM allocation
+on a 512 GB node must budget from 62 GB, not from 512 GB.
+
+`raw` reserves nothing. It runs no transform and keeps the scheduler's full
+width.
+
+Two environment variables override the bound:
+
+| variable | effect |
+| --- | --- |
+| `ZARRMONY_SNOUTY_HOST_MEMORY_BYTES` | An absolute budget in bytes. `0` disables the bound. |
+| `ZARRMONY_SNOUTY_HOST_MEMORY_FRACTION` | A fraction of the detected limit, greater than 0 and at most 1. Default `0.5`. |
+
+```bash
+# Give the transforms 40 GB inside a 64 GB allocation.
+ZARRMONY_SNOUTY_HOST_MEMORY_BYTES=40000000000 \
+  ZARRMONY_SNOUTY_MODE=traditional \
+  zarrmony convert /path/to/…_ht_sols_snap ./out
+```
+
+A task whose footprint exceeds the whole budget still runs. It waits for an
+idle moment and runs alone, rather than deadlocking. A bad value in either
+variable raises a `SnoutyHostMemoryError`.
+
+`SnoutyReader.transform_footprint_bytes` reports what one task will reserve,
+before any pixel work starts.
+
 ## Supported acquisitions
 
 - **Single- or multi-position, single- or multi-timepoint, single- or

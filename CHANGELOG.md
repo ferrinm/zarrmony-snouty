@@ -9,6 +9,31 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **Bounded host memory for the transform modes** (#15). `desheared` and
+  `traditional` now reserve their per-task footprint from a process-wide
+  byte budget before each transform runs, so peak host memory no longer
+  scales with `os.cpu_count()`. At a real acquisition geometry a
+  `traditional` task holds 4.90 GB, which an unbounded 32-thread scheduler
+  turns into 157 GB.
+  - The budget is half of the smaller of the **cgroup memory limit** and
+    total physical RAM. Reading the cgroup limit is what makes the bound
+    correct inside a SLURM allocation — a 62 GB allocation on a 512 GB node
+    budgets from 62 GB.
+  - The footprint is derived from `_deshear.desheared_shape` and
+    `_deshear.traditional_shape`, never hardcoded, so it tracks any change
+    to the shape formulas.
+  - A byte budget rather than a slot count: a session-level convert opens
+    child readers whose geometries differ, and a slot count sized from one
+    scene misbounds the others.
+  - New `ZARRMONY_SNOUTY_HOST_MEMORY_BYTES` (absolute, `0` disables) and
+    `ZARRMONY_SNOUTY_HOST_MEMORY_FRACTION` (default `0.5`) env vars. A bad
+    value raises the new `SnoutyHostMemoryError`.
+  - New `SnoutyReader.transform_footprint_bytes`, readable before compute.
+  - `mode="raw"` is unaffected. It runs no transform, reserves nothing, and
+    keeps the scheduler's full width.
+  - The read and the transform are now **one fused dask task** for the
+    non-`raw` modes. Split, the scheduler can materialize many input volumes
+    before any transform reserves, so the input term would escape the bound.
 - **Top-level GUI-session directory as multi-scene input** (#5). A new
   `SnoutySessionReader` fires on `*_ht_sols_gui/` directories and composes
   one child `SnoutyReader` per non-empty `_ht_sols_*` subdirectory. Its

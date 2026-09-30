@@ -42,15 +42,13 @@ import numpy as np
 import tifffile
 import xarray as xr
 
-from . import _deshear
+from . import _deshear, _hostmem
+from ._errors import SnoutyError
+from ._hostmem import SnoutyHostMemoryError
 from ._metadata import SnoutyMetadata, parse_metadata_dir
 
 Mode = Literal["raw", "desheared", "traditional"]
 _MODES: tuple[Mode, ...] = ("raw", "desheared", "traditional")
-
-
-class SnoutyError(Exception):
-    """Base class for zarrmony-snouty errors."""
 
 
 class SnoutyDataError(SnoutyError):
@@ -82,6 +80,7 @@ class SnoutyXYPositionListError(SnoutyError, ValueError):
 __all__ = [
     "SnoutyDataError",
     "SnoutyError",
+    "SnoutyHostMemoryError",
     "SnoutyModeError",
     "SnoutyReader",
     "SnoutyVolumesPerBufferUnsupportedError",
@@ -131,6 +130,32 @@ def _read_and_crop_plane(path: str, timestamp_strip_px: int):
             f"expected a (Z, Y, X) or (Z, C, Y, X) volume in {path}; got shape {volume.shape}"
         )
     return volume[:, :, timestamp_strip_px:, :]
+
+
+def _read_crop_and_transform(
+    path: str,
+    timestamp_strip_px: int,
+    mode: Mode,
+    scan_step_size_px: float,
+    voxel_aspect_ratio: float,
+    footprint_bytes: int,
+):
+    """Read, crop, and transform one timepoint under a host-memory reservation.
+
+    The read and the transform are deliberately fused into a single dask task.
+    Split across two tasks, the scheduler is free to materialize many input
+    volumes before any transform reserves its budget, so the input term of the
+    footprint would escape the bound. Fused, the whole peak sits inside the
+    reservation. See :mod:`zarrmony_snouty._hostmem`.
+
+    ``raw`` never reaches this function — it runs no transform, so it holds
+    only the input volume and stays unbounded.
+    """
+    with _hostmem.reserve(footprint_bytes):
+        volume = _read_and_crop_plane(path, timestamp_strip_px)
+        if mode == "desheared":
+            return _deshear.deshear_czyx(volume, scan_step_size_px)
+        return _deshear.traditional_czyx(volume, scan_step_size_px, voxel_aspect_ratio)
 
 
 class SnoutyReader:
@@ -225,15 +250,36 @@ class SnoutyReader:
             m.size_z, m.size_y, m.size_x, m.scan_step_size_px, m.voxel_aspect_ratio
         )
 
+    @property
+    def transform_footprint_bytes(self) -> int:
+        """Peak host bytes one dask task holds while it transforms a timepoint.
+
+        ``0`` in ``raw`` mode, which runs no transform. See
+        :mod:`zarrmony_snouty._hostmem` for the bound this feeds.
+        """
+        m = self._meta
+        return _hostmem.transform_footprint_bytes(
+            mode=self._mode,
+            size_z=m.size_z,
+            size_y=m.size_y,
+            size_x=m.size_x,
+            n_channels=len(m.channels),
+            scan_step_size_px=m.scan_step_size_px,
+            voxel_aspect_ratio=m.voxel_aspect_ratio,
+            itemsize=self.dtype.itemsize,
+        )
+
     def _delayed_volume(self, path: Path):
         m = self._meta
-        raw = dask.delayed(_read_and_crop_plane)(str(path), m.timestamp_strip_px)
         if self._mode == "raw":
-            return raw
-        if self._mode == "desheared":
-            return dask.delayed(_deshear.deshear_czyx)(raw, m.scan_step_size_px)
-        return dask.delayed(_deshear.traditional_czyx)(
-            raw, m.scan_step_size_px, m.voxel_aspect_ratio
+            return dask.delayed(_read_and_crop_plane)(str(path), m.timestamp_strip_px)
+        return dask.delayed(_read_crop_and_transform)(
+            str(path),
+            m.timestamp_strip_px,
+            self._mode,
+            m.scan_step_size_px,
+            m.voxel_aspect_ratio,
+            self.transform_footprint_bytes,
         )
 
     @property

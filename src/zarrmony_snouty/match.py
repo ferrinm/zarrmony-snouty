@@ -45,9 +45,7 @@ def match_session(path: Path) -> int | None:
     if not path.name.endswith(_SESSION_SUFFIX):
         return None
     for entry in path.iterdir():
-        if entry.is_dir() and any(
-            entry.name.endswith(suffix) for suffix in _SUBDIR_SUFFIXES
-        ):
+        if entry.is_dir() and any(entry.name.endswith(suffix) for suffix in _SUBDIR_SUFFIXES):
             return 100
     return None
 

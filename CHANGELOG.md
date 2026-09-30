@@ -9,6 +9,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **GPU `traditional` transform** (#8). New internal `_deshear_gpu` module,
+  the cupy counterpart to `_deshear.traditional_zyx`, ported from the same
+  source ([`snouty-folder`](https://github.com/aelefebv/snouty-folder),
+  `SnoutyFolder._affine_rotate`). No reader wiring yet — that is #10.
+  - `traditional` only, per ADR-0002 decision 2. The deshear stays on the
+    CPU, so only the desheared array crosses the PCIe bus.
+  - cupy is a **soft import**. The module loads on a CPU-only install and
+    reports `cupy_available`. There is no `gpu` extra, because cupy wheels
+    are pinned to a CUDA major version (`cupy-cuda12x` against CUDA 12.9 on
+    the measured host) and the generic `cupy` sdist needs a local CUDA
+    toolchain to build. Install the matching wheel yourself.
+  - A module-level lock serializes device work (ADR-0002 decision 3). One
+    call holds 4.17 GB on the device, and an unbounded 16-thread scheduler
+    would demand 67 GB from a 23.46 GiB card. The CPU deshear runs outside
+    the lock, because it allocates host memory rather than device memory.
+  - `required_device_bytes` and `free_device_bytes` let #10 decide the
+    engine before any pixel work starts.
+  - **The GPU result is not byte-identical to the CPU one.** At the measured
+    geometry 0.0036% of voxels differ, all on 29 lines of the 808,780 in the
+    rotated grid. 28 are nearest-neighbour ties, where `scipy` and `cupy`
+    pick opposite equidistant voxels and both answers are equally valid. The
+    remaining line is a real loss: its source coordinate is exactly `0.0`,
+    where scipy reads the first plane and cupy returns the fill value, so
+    the GPU drops one line of voxels at the outermost non-empty edge plane.
+    Measured on real hardware in #18.
+  - Measured throughput is **2.55x the CPU's best**. ADR-0002 predicted the
+    opposite. The CPU transform stops scaling at 8 threads and degrades
+    above it, so a wider node does not close the gap.
+  - New `SnoutyEngineError`, and a `gpu` pytest marker for the tests that
+    need a device.
 - **Bounded host memory for the transform modes** (#15). `desheared` and
   `traditional` now reserve their per-task footprint from a process-wide
   byte budget before each transform runs, so peak host memory no longer

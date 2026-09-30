@@ -237,8 +237,7 @@ class SnoutySessionReader:
     def set_scene(self, index: int) -> None:
         if not 0 <= index < len(self.scenes):
             raise IndexError(
-                f"scene index {index} out of range; valid indices are "
-                f"0..{len(self.scenes) - 1}"
+                f"scene index {index} out of range; valid indices are 0..{len(self.scenes) - 1}"
             )
         self._active = index
         # Forward to the target child eagerly so the child's active-scene

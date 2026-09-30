@@ -60,3 +60,6 @@ select = ["E", "F", "I", "B", "UP", "W"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "-ra"]
+markers = [
+    "gpu: needs a CUDA device and cupy; skipped on a CPU-only host",
+]

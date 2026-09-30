@@ -46,6 +46,10 @@ _Avoid_: metadata file, config, params.
 The top 8 rows of every Y slice, reserved for a PCO camera binary-coded-decimal timestamp burned into pixel values. Cropped off before the array reaches xarray. Constant `TIMESTAMP_STRIP_PX = 8`.
 _Avoid_: header, timestamp header, PCO strip.
 
+**Burned-in stamp**:
+The decoded contents of the first 14 pixels of row 0 of the timestamp strip: a camera frame counter and a capture time to the microsecond. The camera hardware writes it before any software sees the frame, so it is the source of truth for acquisition time and it orders the T axis (#23). Decoded by `_pco_timestamp.py`. Distinguish it from the *timestamp strip*, which is the 8-row region that gets cropped.
+_Avoid_: PCO timestamp (ambiguous with the strip), BCD, frame time.
+
 **Scan step**:
 The physical Y displacement of the scan mirror between successive Z slices during acquisition. Recorded in the sidecar as `scan_step_size_um` (physical) and `scan_step_size_px` (in sample-plane pixels). Determines the raw Z spacing and the deshear shift.
 _Avoid_: Z step, slice spacing, stride.

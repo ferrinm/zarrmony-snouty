@@ -4,7 +4,10 @@ Handles single- and multi-position, single- and multi-channel acquisitions
 with one or more timepoints. Files under ``data/`` are grouped by position
 (the ``MMMMMM`` in ``NNNNNN_pMMMMMM.tif``) into one scene per position;
 within each scene, files are concatenated along the T axis (one dask chunk
-per timepoint). Single-position acquisitions (no ``_pNNNNNN.tif`` files)
+per timepoint). The T axis follows the timestamp the camera burns into the
+pixel data of each file's first frame — see :func:`_order_data_files` and
+:mod:`zarrmony_snouty._pco_timestamp`. Single-position acquisitions (no
+``_pNNNNNN.tif`` files)
 expose one scene named after the acquisition directory, preserving v0.1
 behavior. Multi-position acquisitions expose scenes named
 ``<acquisition-dir>__p<zero-padded-index>`` (the double underscore is the
@@ -31,7 +34,9 @@ see :mod:`zarrmony_snouty._deshear`.
 from __future__ import annotations
 
 import ast
+import datetime as dt
 import re
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -42,7 +47,7 @@ import numpy as np
 import tifffile
 import xarray as xr
 
-from . import _deshear, _hostmem
+from . import _deshear, _hostmem, _pco_timestamp
 from ._errors import SnoutyError
 from ._hostmem import SnoutyHostMemoryError
 from ._metadata import SnoutyMetadata, parse_metadata_dir
@@ -77,12 +82,24 @@ class SnoutyXYPositionListError(SnoutyError, ValueError):
     malformed (unparseable line, wrong arity, or non-numeric values)."""
 
 
+class SnoutyTimestampWarning(UserWarning):
+    """The burned-in camera timestamps did not order an acquisition's data
+    files, so the reader fell back to the zero-padded filename order, or they
+    ordered them differently from the filenames.
+
+    The fallback is deterministic and correct for any acquisition Snouty wrote
+    itself, so this warning reports a loss of the strongest ordering evidence
+    rather than a loss of data.
+    """
+
+
 __all__ = [
     "SnoutyDataError",
     "SnoutyError",
     "SnoutyHostMemoryError",
     "SnoutyModeError",
     "SnoutyReader",
+    "SnoutyTimestampWarning",
     "SnoutyVolumesPerBufferUnsupportedError",
     "SnoutyXYPositionListError",
 ]
@@ -176,12 +193,13 @@ class SnoutyReader:
         self._dir = Path(path)
         self._mode: Mode = mode
         self._meta: SnoutyMetadata = parse_metadata_dir(self._dir / "metadata")
-        all_files = sorted(
-            (self._dir / "data").glob("*.tif"),
-            key=lambda p: p.stat().st_mtime,
-        )
-        if not all_files:
+        found = list((self._dir / "data").glob("*.tif"))
+        if not found:
             raise SnoutyDataError(f"no .tif files in {self._dir / 'data'}")
+        # Reject an impossible layout before opening N files to read their
+        # burned-in timestamps.
+        _reject_mixed_positions(found, self._dir / "data")
+        all_files = _order_data_files(found, self._dir / "metadata")
 
         _validate_v01_scope(self._meta)
 
@@ -339,25 +357,154 @@ class SnoutyReader:
         pass
 
 
+# How far the camera's burned-in stamp is allowed to sit from the ``Date`` and
+# ``Time`` the vendor wrote into the matching sidecar. The sidecar is stamped
+# when the buffer is flushed to disk, a fraction of a second after the first
+# frame in the observed acquisitions. One hour is loose enough that a slow
+# flush never trips it, and tight enough to catch a camera whose stamp layout
+# differs from the one this reader decodes.
+_SIDECAR_STAMP_TOLERANCE = dt.timedelta(hours=1)
+
+
+def _sidecar_datetime(path: Path) -> dt.datetime | None:
+    """Read the ``Date`` and ``Time`` fields out of one vendor sidecar.
+
+    Returns ``None`` when the file is absent or unreadable, or when either
+    field is missing or malformed. The caller treats ``None`` as "no
+    cross-check available", not as a failure.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    fields: dict[str, str] = {}
+    for line in text.splitlines():
+        key, separator, value = line.partition(":")
+        if separator and key.strip() in ("Date", "Time"):
+            fields[key.strip()] = value.strip()
+    if "Date" not in fields or "Time" not in fields:
+        return None
+    try:
+        return dt.datetime.strptime(f"{fields['Date']} {fields['Time']}", "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _position_groups(ordered: list[Path]) -> dict[str | None, list[str]]:
+    """Split an ordered file list into per-position lists of filenames.
+
+    Only the order inside a position group reaches the T axis of a scene, so
+    this is the grouping the timestamp/filename agreement check compares.
+    """
+    groups: dict[str | None, list[str]] = {}
+    for path in ordered:
+        match = _POSITION_TIF_RE.match(path.name)
+        groups.setdefault(match.group("p") if match is not None else None, []).append(path.name)
+    return groups
+
+
+def _order_data_files(files: list[Path], metadata_dir: Path) -> list[Path]:
+    """Order one acquisition's ``.tif`` files along the time axis.
+
+    The primary key is the PCO timestamp that the camera burns into the pixel
+    data of frame 0 of every file (see :mod:`zarrmony_snouty._pco_timestamp`).
+    The hardware writes it before any software sees the frame, so it is the
+    only key that survives a filesystem whose ``st_mtime`` granularity ties
+    every file in a run, and a copy made with ``cp -r`` or with ``rsync``
+    without ``-t``. Both of those destroy mtime as an ordering key, and both
+    used to reorder the T axis silently.
+
+    The fallback is the zero-padded filename order, which the vendor writes as
+    ``'%06i_%s.tif' % (t, position_string)``. The reader falls back when:
+
+    - any file carries no stamp this reader recognizes,
+    - two files share a camera frame counter,
+    - the first file's stamp disagrees with its own sidecar.
+
+    Each fallback emits a :class:`SnoutyTimestampWarning`. Unlike the
+    ``st_mtime`` sort it replaces, the fallback is deterministic.
+    """
+    by_name = sorted(files, key=lambda p: p.name)
+    stamps = {path: _pco_timestamp.read_stamp(path) for path in by_name}
+
+    unreadable = [path.name for path in by_name if stamps[path] is None]
+    if unreadable:
+        warnings.warn(
+            f"{metadata_dir.parent / 'data'}: {len(unreadable)} of {len(by_name)} .tif "
+            f"files carry no readable burned-in camera timestamp "
+            f"(first: {unreadable[0]}); ordering the time axis by filename instead",
+            SnoutyTimestampWarning,
+            stacklevel=3,
+        )
+        return by_name
+
+    counters = [stamps[path].counter for path in by_name]  # type: ignore[union-attr]
+    if len(set(counters)) != len(counters):
+        warnings.warn(
+            f"{metadata_dir.parent / 'data'}: the burned-in camera frame counter repeats "
+            f"across .tif files, so it cannot order them; ordering the time axis by "
+            f"filename instead",
+            SnoutyTimestampWarning,
+            stacklevel=3,
+        )
+        return by_name
+
+    first = by_name[0]
+    expected = _sidecar_datetime(metadata_dir / f"{first.stem}.txt")
+    stamped = stamps[first].timestamp  # type: ignore[union-attr]
+    if expected is not None and abs(stamped - expected) > _SIDECAR_STAMP_TOLERANCE:
+        warnings.warn(
+            f"{metadata_dir.parent / 'data'}: the burned-in camera timestamp of "
+            f"{first.name} reads {stamped.isoformat()} but its sidecar reads "
+            f"{expected.isoformat()}; the stamp layout is not the one this reader "
+            f"decodes, so it is ordering the time axis by filename instead",
+            SnoutyTimestampWarning,
+            stacklevel=3,
+        )
+        return by_name
+
+    by_stamp = sorted(by_name, key=lambda p: stamps[p])  # type: ignore[arg-type,return-value]
+    if _position_groups(by_stamp) != _position_groups(by_name):
+        warnings.warn(
+            f"{metadata_dir.parent / 'data'}: the burned-in camera timestamps put the "
+            f"timepoints of a position in a different order from the filenames; "
+            f"trusting the timestamps, because the camera writes them into the pixel "
+            f"data at capture time",
+            SnoutyTimestampWarning,
+            stacklevel=3,
+        )
+    return by_stamp
+
+
+def _reject_mixed_positions(files: list[Path], data_dir: Path) -> None:
+    """Raise if ``data/`` holds both ``NNNNNN_pMMMMMM.tif`` and plain names.
+
+    Snouty never writes such a mix, and letting it slide would silently drop
+    timepoints from one of the scenes. Pure and cheap — a regex per filename,
+    no I/O — so the reader runs it before it reads any pixel data.
+    """
+    shapes = {_POSITION_TIF_RE.match(f.name) is not None for f in files}
+    if len(shapes) > 1:
+        raise SnoutyDataError(
+            f"{data_dir} mixes multi-position (_pNNNNNN.tif) and non-position "
+            "files; refusing to guess how they map to scenes"
+        )
+
+
 def _group_by_position(files: list[Path], data_dir: Path) -> list[tuple[int | None, list[Path]]]:
     """Group ``.tif`` files by position index encoded in ``NNNNNN_pMMMMMM.tif``.
 
     Files that do not match the pattern are grouped under ``None`` (legacy
-    single-position shape). Mixing the two shapes in a single ``data/`` dir
-    is rejected as a hard error — Snouty never writes such a mix, and letting
-    it slide would silently drop timepoints from one of the scenes.
+    single-position shape). A mix of the two shapes raises — see
+    :func:`_reject_mixed_positions`.
     """
+    _reject_mixed_positions(files, data_dir)
     by_position: dict[int | None, list[Path]] = {}
     for f in files:
         match = _POSITION_TIF_RE.match(f.name)
         key = int(match.group("p")) if match is not None else None
         by_position.setdefault(key, []).append(f)
 
-    if None in by_position and len(by_position) > 1:
-        raise SnoutyDataError(
-            f"{data_dir} mixes multi-position (_pNNNNNN.tif) and non-position "
-            "files; refusing to guess how they map to scenes"
-        )
     if None in by_position:
         return [(None, by_position[None])]
     # Sort by numeric position index so scene order is stable and matches the

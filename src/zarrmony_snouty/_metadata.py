@@ -52,17 +52,25 @@ class SnoutyMetadata:
 
 
 def parse_metadata_dir(metadata_dir: Path) -> SnoutyMetadata:
-    """Load the first ``.txt`` file in ``metadata_dir`` (by mtime) as a ``SnoutyMetadata``.
+    """Load the first ``.txt`` file in ``metadata_dir`` (first by mtime, then by
+    name) as a ``SnoutyMetadata``.
 
     Snouty ``_acquire`` runs write one ``.txt`` per data buffer; the first
     (oldest) file describes the run's fixed geometry and channels. This matches
     the convention in ``snouty-folder``.
+
+    The name is a tiebreaker, not decoration. A filesystem with a coarse mtime
+    granularity reports one identical ``st_mtime`` for every file a run wrote,
+    and a copy made with ``cp -r`` or with ``rsync`` without ``-t`` does the
+    same. ``sorted`` is stable, so without the tiebreaker the winner fell back
+    to ``iterdir`` order, which is arbitrary. The vendor zero-pads these names,
+    so name order and mtime order agree whenever the mtimes are trustworthy.
     """
     if not metadata_dir.is_dir():
         raise SnoutyMetadataError(f"metadata directory does not exist: {metadata_dir}")
     candidates = sorted(
         (p for p in metadata_dir.iterdir() if p.is_file() and p.suffix == ".txt"),
-        key=lambda p: p.stat().st_mtime,
+        key=lambda p: (p.stat().st_mtime, p.name),
     )
     if not candidates:
         raise SnoutyMetadataError(f"no .txt files in {metadata_dir}")

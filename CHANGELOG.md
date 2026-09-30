@@ -123,6 +123,50 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   multi-timepoint and multi-position paths. Verified end-to-end against
   the `('LED', '488')` acquisitions in the exploratory session.
 
+### Fixed
+
+- **The T axis could come out in an arbitrary order** (#23). `SnoutyReader`
+  ordered `data/*.tif` by `st_mtime` alone. On a filesystem with a coarse
+  mtime granularity every file of one acquisition reports the *same*
+  `st_mtime`, `sorted` is stable, so the order fell back to `os.scandir`
+  order. That order is arbitrary. The converted store looked fine and its
+  timepoints were in the wrong order, with no error and no warning.
+  - Reachable on any filesystem. A copy made with `cp -r`, or with `rsync`
+    without `-t`, drops the original mtimes the same way. `os.scandir` order
+    is not name order anywhere: on APFS, six files created as `000000` to
+    `000005` in ascending order list as `000000, 000001, 000003, 000002,
+    000005, 000004`.
+  - **The T axis now follows the timestamp the camera burns into the pixel
+    data.** The PCO hardware writes a binary-coded-decimal frame counter and
+    a microsecond-resolution capture time into the first 14 pixels of row 0
+    of every 2D frame, before any software sees the frame. That makes it the
+    only ordering key that survives a copy and a coarse filesystem clock. New
+    internal `_pco_timestamp` module.
+  - Verified against every acquisition on the internal share that the reader
+    accepts: 115 acquisitions spanning 2023 to 2026, from ten operators, 111
+    single-position and 4 multi-position. Every sampled frame decoded, every
+    decoded time landed within 3.5 seconds of its own sidecar's `Date` and
+    `Time`, and the frame-counter order matched the filename order every
+    time.
+  - The stamp is read from the first frame only, and from a 28-byte seek
+    rather than a full page read, so ordering an acquisition costs one TIFF
+    header parse per file.
+  - Falls back to the zero-padded filename order, with a new
+    `SnoutyTimestampWarning`, when a file carries no stamp this reader
+    recognizes, when two files share a frame counter, or when the first
+    file's stamp disagrees with its own sidecar by more than an hour. Unlike
+    the `st_mtime` sort it replaces, the fallback is deterministic.
+  - The reader trusts the stamp over the filename when the two disagree, and
+    warns.
+  - `parse_metadata_dir` picks the first sidecar **first by mtime, then by
+    name**. The same tie made the pick of the geometry sidecar arbitrary.
+  - `SnoutySessionReader` enumerates scene names in filename order. That sort
+    only decides scene *names*, so the session reader stays lazy and the
+    child reader pays for the authoritative time order when a caller opens
+    the scene.
+  - The synthetic test fixture now burns a real PCO stamp into row 0 of every
+    frame, and its default `size_x` grows from 8 to 16 to hold it.
+
 ### Changed
 
 - `_read_and_crop_plane` now always returns `(C, Z, Y, X)`: bare

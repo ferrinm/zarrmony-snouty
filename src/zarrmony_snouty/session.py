@@ -182,10 +182,12 @@ class SnoutySessionReader:
         self._readers: list[SnoutyReader | None] = []
 
         for subdir in surviving:
-            data_files = sorted(
-                (subdir / "data").glob("*.tif"),
-                key=lambda p: p.stat().st_mtime,
-            )
+            # Filename order, not time order. This sort only decides scene
+            # *names*, which depend on the set of position indices and not on
+            # the T axis. The authoritative time order costs one header read
+            # per .tif, and the child reader pays it lazily in
+            # adapter._order_data_files when the caller opens the scene.
+            data_files = sorted((subdir / "data").glob("*.tif"), key=lambda p: p.name)
             grouped = _group_by_position(data_files, subdir / "data")
             is_single_position = len(grouped) == 1 and grouped[0][0] is None
             if is_single_position:

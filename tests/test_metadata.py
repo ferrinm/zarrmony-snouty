@@ -140,3 +140,42 @@ def test_picks_first_sidecar_by_mtime(tmp_path: Path) -> None:
     meta = parse_metadata_dir(d)
     assert meta.channels == ("LED",)
     assert meta.size_z == 2
+
+
+def _sidecar(channel: str, slices: int) -> str:
+    return (
+        f"channels_per_slice: ('{channel}',)\n"
+        f"slices_per_volume: {slices}\n"
+        "height_px: 100\n"
+        "width_px: 200\n"
+        "volumes_per_buffer: 1\n"
+        "sample_px_um: 0.1\n"
+        "scan_step_size_um: 1.0\n"
+        "voxel_aspect_ratio: 2.0\n"
+        "scan_step_size_px: 3.0\n"
+    )
+
+
+def test_picks_first_sidecar_by_name_when_the_mtimes_tie(tmp_path: Path) -> None:
+    """The third site in #23.
+
+    A filesystem with a coarse mtime granularity reports one identical mtime
+    for every file a run wrote. ``sorted`` is stable, so without the name
+    tiebreaker the winner was whatever ``iterdir`` yielded first, which is
+    arbitrary. The sidecar that wins supplies the geometry of the whole scene.
+    """
+    import os
+
+    d = tmp_path / "metadata"
+    d.mkdir()
+    # Write the later sidecar first, so creation order disagrees with name order.
+    (d / "000001.txt").write_text(_sidecar("OTHER", 4))
+    (d / "000000.txt").write_text(_sidecar("LED", 2))
+    for path in d.iterdir():
+        os.utime(path, (1_000.0, 1_000.0))
+
+    assert len({p.stat().st_mtime for p in d.iterdir()}) == 1
+
+    meta = parse_metadata_dir(d)
+    assert meta.channels == ("LED",)
+    assert meta.size_z == 2

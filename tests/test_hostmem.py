@@ -263,12 +263,12 @@ class _ConcurrencySpy:
                 self._live -= 1
 
 
-# Synthetic fixture geometry: size_z=4, cropped size_y=6, size_x=8,
+# Synthetic fixture geometry: size_z=4, cropped size_y=6, size_x=16,
 # scan_step_size_px=7.0, one channel, uint16.
-#   raw       (4,  6, 8) =  192 voxels
-#   desheared (4, 27, 8) =  864 voxels   (6 + round(7 * 3) = 27)
-# desheared footprint = (192 + 864) * 1 channel * 2 bytes = 2112 bytes
-FIXTURE_DESHEARED_FOOTPRINT = 2112
+#   raw       (4,  6, 16) =  384 voxels
+#   desheared (4, 27, 16) = 1728 voxels   (6 + round(7 * 3) = 27)
+# desheared footprint = (384 + 1728) * 1 channel * 2 bytes = 4224 bytes
+FIXTURE_DESHEARED_FOOTPRINT = 4224
 
 
 def test_reader_footprint_matches_the_fixture_geometry(synthetic_snouty):
@@ -323,7 +323,7 @@ def test_raw_mode_is_not_bounded(tmp_path, monkeypatch):
     assert reader.transform_footprint_bytes == 0
     with dask.config.set(scheduler="threads", num_workers=8):
         result = reader.xarray_dask_data.compute()
-    assert result.shape == (4, 1, 4, 6, 8)
+    assert result.shape == (4, 1, fixture.size_z, fixture.size_y, fixture.size_x)
 
 
 def test_bounded_and_unbounded_output_is_identical(tmp_path, monkeypatch):

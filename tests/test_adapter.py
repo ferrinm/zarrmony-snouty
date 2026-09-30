@@ -539,10 +539,11 @@ def test_multi_timepoint_desheared_mode(tmp_path: Path) -> None:
             assert (plane[shift : shift + fixture.size_y, :] == fixture.value_for(z, t)).all()
 
 
-def test_multi_timepoint_ordering_uses_mtime_matching_filename_order(tmp_path: Path) -> None:
-    # snouty-folder sorts by mtime; zero-padded filenames make mtime and
-    # filename orders equivalent for correctly-written acquisitions. Confirm
-    # our reader agrees with filename order (i.e. 000000 → t=0, 000001 → t=1).
+def test_multi_timepoint_ordering_matches_filename_order(tmp_path: Path) -> None:
+    # The reader orders the T axis by the camera's burned-in timestamp, which
+    # agrees with the zero-padded filename order for any acquisition Snouty
+    # wrote itself. Confirm that agreement (i.e. 000000 → t=0, 000001 → t=1).
+    # tests/test_time_order.py covers what happens when they disagree.
     fixture = write_synthetic_snouty(tmp_path, n_timepoints=2)
     reader = SnoutyReader(fixture.dir)
     computed = reader.xarray_dask_data.data.compute()

@@ -180,6 +180,13 @@ before any pixel work starts.
   multi-channel snap and acquire runs.** Multi-position acquisitions expose
   one scene per position; multi-timepoint concatenates along T; multi-channel
   places the vendor's channel labels verbatim along C.
+- **The T axis follows the timestamp the camera burns into the pixel data.**
+  The PCO hardware writes a frame counter and a capture time into the first
+  pixels of every 2D frame, before any software sees it. File mtimes order
+  nothing, so a coarse filesystem clock, a `cp -r`, or an `rsync` without
+  `-t` cannot scramble the timepoints. If a file carries no stamp the reader
+  recognizes, it falls back to the zero-padded filename order and warns with
+  `SnoutyTimestampWarning`.
 - **Whole GUI-session directories** — one `zarrmony convert` on
   `*_ht_sols_gui/` produces one output store per non-empty subdir. Empty or
   malformed subdirs are skipped with a warning.
@@ -208,6 +215,12 @@ for the remaining unsupported shape.
   describes a well-plate scan-order still surface as a flat scene list.
   Plate-shape detection and OME-NGFF HCS output are tracked for a later
   release.
+  - Plate tile scans also use a third directory suffix and a third filename
+    shape: `*_ht_sols_acquisition_*` directories holding
+    `NNNNNN_<well>r<row>c<col>.tif`. Detection accepts neither suffix, so the
+    reader rejects these directories instead of reading them as a flat T
+    axis. The stage visits the tiles in a serpentine order, so their
+    burned-in frame counters ascend in tile order and not in filename order.
 
 ## Roadmap
 

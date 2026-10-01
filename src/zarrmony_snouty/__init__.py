@@ -40,21 +40,30 @@ __all__ = [
 
 _MODE_ENV_VAR = "ZARRMONY_SNOUTY_MODE"
 
+# Mode is the output geometry, engine is where it computes. Two separate
+# vars, because they are independent choices: ``traditional`` is the only
+# mode with a GPU path, and it still runs on the CPU by default.
+_ENGINE_ENV_VAR = "ZARRMONY_SNOUTY_ENGINE"
+
 
 def _open(path: Path) -> SnoutyReader:
-    # ReaderPlugin.open only takes a path, so mode is opted in through an env
-    # var — SnoutyReader validates the value and raises SnoutyModeError on an
-    # unknown mode.
+    # ReaderPlugin.open only takes a path, so mode and engine are opted in
+    # through env vars — SnoutyReader validates both values and raises
+    # SnoutyModeError or SnoutyEngineError on an unknown one.
     mode = os.environ.get(_MODE_ENV_VAR, "raw")
-    return SnoutyReader(path, mode=mode)
+    engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
+    return SnoutyReader(path, mode=mode, engine=engine)
 
 
 def _open_session(path: Path) -> SnoutySessionReader:
     # Same env-var contract as the subdir plugin; the session reader forwards
     # ``mode`` to every child SnoutyReader it instantiates, so a single
     # ``ZARRMONY_SNOUTY_MODE=desheared`` deshears every subdir in the batch.
+    # ``engine`` is resolved by the session itself, which under ``auto`` picks
+    # one engine for the whole batch.
     mode = os.environ.get(_MODE_ENV_VAR, "raw")
-    return SnoutySessionReader(path, mode=mode)
+    engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
+    return SnoutySessionReader(path, mode=mode, engine=engine)
 
 
 plugin = ReaderPlugin(

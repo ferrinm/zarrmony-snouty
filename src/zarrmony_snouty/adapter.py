@@ -47,13 +47,18 @@ import numpy as np
 import tifffile
 import xarray as xr
 
-from . import _deshear, _hostmem, _pco_timestamp
+from . import _deshear, _deshear_gpu, _engine, _hostmem, _pco_timestamp
+from ._engine import Engine, ResolvedEngine
 from ._errors import SnoutyError
 from ._hostmem import SnoutyHostMemoryError
 from ._metadata import SnoutyMetadata, parse_metadata_dir
 
 Mode = Literal["raw", "desheared", "traditional"]
 _MODES: tuple[Mode, ...] = ("raw", "desheared", "traditional")
+
+#: Snouty PCO output is always 16-bit. One constant so the dask graph, the
+#: ``dtype`` property, and the device-memory estimate cannot drift apart.
+DTYPE = np.dtype("uint16")
 
 
 class SnoutyDataError(SnoutyError):
@@ -156,6 +161,7 @@ def _read_crop_and_transform(
     scan_step_size_px: float,
     voxel_aspect_ratio: float,
     footprint_bytes: int,
+    engine: ResolvedEngine,
 ):
     """Read, crop, and transform one timepoint under a host-memory reservation.
 
@@ -167,11 +173,20 @@ def _read_crop_and_transform(
 
     ``raw`` never reaches this function — it runs no transform, so it holds
     only the input volume and stays unbounded.
+
+    ``engine`` is already resolved to ``cpu`` or ``gpu`` by the reader. There
+    is no fallback here on purpose: a transient CUDA fault raises and fails
+    the convert. A fallback inside a dask task cannot report itself — under a
+    distributed scheduler it happens on a worker process and never reaches
+    the client's reader object, so the audit would say ``gpu`` for pixels the
+    CPU produced. See issue #10.
     """
     with _hostmem.reserve(footprint_bytes):
         volume = _read_and_crop_plane(path, timestamp_strip_px)
         if mode == "desheared":
             return _deshear.deshear_czyx(volume, scan_step_size_px)
+        if engine == "gpu":
+            return _deshear_gpu.traditional_czyx(volume, scan_step_size_px, voxel_aspect_ratio)
         return _deshear.traditional_czyx(volume, scan_step_size_px, voxel_aspect_ratio)
 
 
@@ -184,15 +199,28 @@ class SnoutyReader:
         path: Path,
         mode: Mode = "raw",
         *,
+        engine: Engine = "auto",
+        engine_decision: tuple[ResolvedEngine, str | None] | None = None,
         xy_positions: list[tuple[float, float]] | None | object = _XY_POSITIONS_AUTO,
     ) -> None:
         if mode not in _MODES:
             raise SnoutyModeError(
                 f"unknown SnoutyReader mode {mode!r}; expected one of {list(_MODES)}"
             )
+        _engine.validate(engine)
         self._dir = Path(path)
         self._mode: Mode = mode
         self._meta: SnoutyMetadata = parse_metadata_dir(self._dir / "metadata")
+        # Resolved once, here, before any pixel work. The capacity branch
+        # needs the sidecar geometry, so this cannot sit above the parse.
+        # ``engine_decision`` is how SnoutySessionReader imposes one engine on
+        # every child: the session already resolved, and a child must not
+        # second-guess it. Same override precedent as ``xy_positions``.
+        self.engine_used, self.engine_fallback_reason = engine_decision or _engine.resolve(
+            engine,
+            mode,
+            lambda: _engine.required_device_bytes(self._meta, itemsize=DTYPE.itemsize),
+        )
         found = list((self._dir / "data").glob("*.tif"))
         if not found:
             raise SnoutyDataError(f"no .tif files in {self._dir / 'data'}")
@@ -235,7 +263,7 @@ class SnoutyReader:
         # dtype matches the vendor's PCO output (16-bit) — same assumption
         # snouty-folder makes when writing its OME-TIFFs.
         volumes = [
-            da.from_delayed(self._delayed_volume(path), shape=shape_czyx, dtype="uint16")
+            da.from_delayed(self._delayed_volume(path), shape=shape_czyx, dtype=DTYPE)
             for path in files
         ]
         stacked = da.stack(volumes, axis=0)  # (T, C, Z, Y, X)
@@ -298,6 +326,7 @@ class SnoutyReader:
             m.scan_step_size_px,
             m.voxel_aspect_ratio,
             self.transform_footprint_bytes,
+            self.engine_used,
         )
 
     @property
@@ -322,11 +351,10 @@ class SnoutyReader:
     @property
     def dtype(self) -> np.dtype:
         # zarrmony >=0.9 reads reader.dtype in _channels_for_scene to compute
-        # the OME-NGFF display window. Snouty PCO output is always uint16 —
-        # the ``da.from_delayed(..., dtype="uint16")`` construction below is
-        # the source of truth; mirror it here without materializing the
-        # xarray_dask_data graph.
-        return np.dtype("uint16")
+        # the OME-NGFF display window. ``DTYPE`` is the one source of truth,
+        # shared with the dask graph below, so this answers without
+        # materializing ``xarray_dask_data``.
+        return DTYPE
 
     @property
     def metadata(self) -> str:
@@ -347,10 +375,16 @@ class SnoutyReader:
 
         Fills gaps only — zarrmony uses ``setdefault`` semantics so any key
         the LIF/OME extractors populated wins over this dict.
+
+        The ``zarrmony_snouty`` sub-dict records which engine wrote the
+        pixels. It is namespaced rather than flat, because zarrmony's audit
+        vocabulary is a documented set of top-level keys and this is a
+        reader-specific addition to it.
         """
         return {
             "imaging_method": ["light_sheet"],
             "microscope": "HT-SOLS",
+            _engine.AUDIT_KEY: _engine.audit_payload(self.engine_used, self.engine_fallback_reason),
         }
 
     def close(self) -> None:

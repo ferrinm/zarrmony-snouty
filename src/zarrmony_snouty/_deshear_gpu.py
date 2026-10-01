@@ -88,6 +88,24 @@ def traditional_zyx(
         )
 
 
+def traditional_czyx(
+    volume: np.ndarray, scan_step_size_px: float, voxel_aspect_ratio: float
+) -> np.ndarray:
+    """Per-channel wrapper: traditional-view a ``(C, Z, Y, X)`` volume.
+
+    Mirrors :func:`_deshear.traditional_czyx`. Channels go one at a time, so
+    the device holds one channel's worth however many the acquisition has —
+    which is the figure :func:`required_device_bytes` reports.
+    """
+    return np.stack(
+        [
+            traditional_zyx(volume[c], scan_step_size_px, voxel_aspect_ratio)
+            for c in range(volume.shape[0])
+        ],
+        axis=0,
+    )
+
+
 def _rotate_on_device(
     desheared: np.ndarray,
     *,
@@ -160,6 +178,48 @@ def free_device_bytes() -> int | None:
         # of those means the same thing to a caller: do not plan on the GPU.
         return None
     return int(free)
+
+
+def cupy_version() -> str | None:
+    """Version of the installed cupy, or ``None`` when it is not installed.
+
+    Goes into the acquisition audit. The CPU and the GPU engines do not write
+    identical pixels (#18), so a store's provenance has to say which library
+    produced it, not only which engine.
+    """
+    if cupy is None:
+        return None
+    return str(cupy.__version__)
+
+
+def _raw_runtime_version() -> int | None:
+    """The CUDA runtime version as cupy reports it, or ``None``.
+
+    Split out as one substitutable leaf so that the version decode below is
+    checkable on a host with no card.
+    """
+    if cupy is None:
+        return None
+    try:
+        return int(cupy.cuda.runtime.runtimeGetVersion())
+    except Exception:
+        # Same three causes as free_device_bytes: no device, a driver
+        # mismatch, or a device in a bad state.
+        return None
+
+
+def cuda_runtime_version() -> str | None:
+    """CUDA runtime version as ``"<major>.<minor>"``, or ``None``.
+
+    CUDA packs the version into one integer as ``1000 * major + 10 * minor``,
+    so 12040 means 12.4. The audit stores the decoded string, because a
+    provenance record is read by people.
+    """
+    raw = _raw_runtime_version()
+    if raw is None:
+        return None
+    major, remainder = divmod(raw, 1000)
+    return f"{major}.{remainder // 10}"
 
 
 def _volume(shape: tuple[int, int, int]) -> int:

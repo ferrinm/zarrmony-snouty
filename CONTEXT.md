@@ -61,11 +61,11 @@ _Avoid_: Z/XY ratio, anisotropy, pixel aspect.
 ### Output modes (v0.2 #1)
 
 **Raw**:
-The vendor's skewed `(Z, Y, X)` volume as read from the TIFF, with the timestamp strip cropped off. Z spacing is the scan step, not the orthogonal Z. v0.1 default and permanent backward-compat mode.
+The vendor's skewed `(Z, Y, X)` volume as read from the TIFF, with the timestamp strip cropped off. Z spacing is the scan step, not the orthogonal Z. Default through v0.2, and a permanent backward-compat mode.
 _Avoid_: skewed, as-acquired, native (vendor calls it "native" but that overloads with `DataNative`).
 
 **Desheared**:
-Per-slice Y shift by `int(round(scan_step_size_px * z))`, aligning axes. Same physical pixel spacing as raw. Output shape `(Z, Y + max_shift, X)`.
+Per-slice Y shift by `int(round(scan_step_size_px * z))`, aligning axes. Same physical pixel spacing as raw. Output shape `(Z, Y + max_shift, X)`. **The default since v0.3** (#11): it is lossless, it costs 0.15 s per timepoint, and the padding compresses to nothing.
 _Avoid_: shifted, unskewed, aligned, deskewed.
 
 **Traditional**:

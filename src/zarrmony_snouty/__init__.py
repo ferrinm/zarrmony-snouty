@@ -19,7 +19,7 @@ from pathlib import Path
 
 from zarrmony.readers.plugin import ReaderPlugin
 
-from .adapter import SnoutyReader
+from .adapter import DEFAULT_MODE, SnoutyReader
 from .match import match, match_session
 from .session import (
     SnoutySessionLayoutWarning,
@@ -50,7 +50,7 @@ def _open(path: Path) -> SnoutyReader:
     # ReaderPlugin.open only takes a path, so mode and engine are opted in
     # through env vars — SnoutyReader validates both values and raises
     # SnoutyModeError or SnoutyEngineError on an unknown one.
-    mode = os.environ.get(_MODE_ENV_VAR, "raw")
+    mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutyReader(path, mode=mode, engine=engine)
 
@@ -61,7 +61,7 @@ def _open_session(path: Path) -> SnoutySessionReader:
     # ``ZARRMONY_SNOUTY_MODE=desheared`` deshears every subdir in the batch.
     # ``engine`` is resolved by the session itself, which under ``auto`` picks
     # one engine for the whole batch.
-    mode = os.environ.get(_MODE_ENV_VAR, "raw")
+    mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutySessionReader(path, mode=mode, engine=engine)
 

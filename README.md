@@ -65,6 +65,10 @@ copied from the vendor's `metadata/<name>.txt` sidecar, and channel names from
 `channels_per_slice`. The verbatim sidecar text is preserved in the audit at
 `<store>/OME/source/raw.snouty.txt`.
 
+Since v0.3 the default mode is `desheared`, so the Y extent of that store is
+`Y + max_shift` and not the vendor's `Y`. For the pre-v0.3 shape, see
+[Getting the pre-v0.3 output](#getting-the-pre-v03-output).
+
 ### Whole GUI-session directory
 
 Point `zarrmony convert` at the parent `*_ht_sols_gui/` directory to fan out
@@ -86,19 +90,18 @@ subdir surfaces its stage coordinates as `attrs.zarrmony.stage.xy_mm` on the
 returned xarray. Mismatched list lengths emit a `SnoutySessionLayoutWarning`
 per affected subdir and omit the attrs for that subdir.
 
-The default Z spacing is the **raw scan step** — the physical distance the
-scan mirror moves between successive slices — not the de-sheared/rotated
-orthogonal Z. To get orthogonal geometry, pick a non-default output mode
-(see below).
+The Z spacing is the **scan step** — the physical distance the scan mirror
+moves between successive slices — in both `raw` and `desheared`. Only
+`traditional` reports an orthogonal Z. See the modes below.
 
 ### Output modes
 
 `SnoutyReader` takes a `mode` selector with three values:
 
-- `raw` (default) — the vendor's skewed `(Z, Y, X)` volume, only the PCO
-  timestamp strip cropped. Z spacing is `scan_step_size_um`. This preserves
-  v0.1 output byte-for-byte.
-- `desheared` — each z-plane is shifted along Y by
+- `raw` — the vendor's skewed `(Z, Y, X)` volume, only the PCO timestamp
+  strip cropped. Z spacing is `scan_step_size_um`. This preserves v0.1 and
+  v0.2 output byte-for-byte.
+- `desheared` (default since v0.3) — each z-plane is shifted along Y by
   `int(round(scan_step_size_px * z))` so orthogonal features line up. Output
   shape is `(T, C, Z, Y + max_shift, X)`. Physical pixel sizes are
   unchanged (deshear only aligns axes; it does not change spacing).
@@ -107,16 +110,56 @@ orthogonal Z. To get orthogonal geometry, pick a non-default output mode
   Y/Z swap and Z flip. Output is a top-down orthogonal view; Z spacing
   becomes `sample_px_um * voxel_aspect_ratio`.
 
+#### Getting the pre-v0.3 output
+
+The default was `raw` through v0.2. **v0.3 changed it to `desheared`**, so
+the same command now writes a different shape. Name the mode to get the old
+output back:
+
+```python
+from zarrmony_snouty import SnoutyReader
+
+reader = SnoutyReader("/path/to/…_ht_sols_snap", mode="raw")
+```
+
+```bash
+ZARRMONY_SNOUTY_MODE=raw zarrmony convert /path/to/…_ht_sols_snap ./out
+```
+
+Nothing is lost by the flip. Deshear writes every input voxel exactly once
+into a zeroed output at an integer offset, so `raw` is recoverable from a
+desheared store given the sidecar. That is why `desheared` is the default and
+`traditional` is not: `traditional` resamples with nearest-neighbour and does
+not invert.
+
+The padding is close to free on disk, because zeros compress to nothing.
+Measured with zstd level 3 on a real 60-plane sub-volume, signal costs 0.941
+bytes per voxel and zero padding costs 0.000061.
+
+An end-to-end `zarrmony convert` of a real 48-plane snap agrees. The default
+array holds 2.71x the voxels of the raw array (Y grows from 192 to 521), and
+it occupies 15,048,616 bytes against the raw array's 15,061,674 — a ratio of
+1.00x.
+
+The whole store can still grow, for a different reason. A desheared array is
+taller, so it can cross zarrmony's threshold for an extra pyramid level. In
+the convert above, the raw store stopped at level 0 and the desheared store
+added a level 1 of 3.5 MB, which made the store 1.23x. Downsampling blends
+padding with signal, so the extra level does not compress like the padding
+does.
+
+#### Choosing a mode
+
 The Python API takes the mode directly:
 
 ```python
 from zarrmony_snouty import SnoutyReader
 
-reader = SnoutyReader("/path/to/…_ht_sols_snap", mode="desheared")
+reader = SnoutyReader("/path/to/…_ht_sols_snap", mode="traditional")
 ```
 
-For CLI use, opt in via the `ZARRMONY_SNOUTY_MODE` env var (the plugin's
-`open` callable only accepts a path):
+For CLI use, set the `ZARRMONY_SNOUTY_MODE` env var (the plugin's `open`
+callable only accepts a path):
 
 ```bash
 ZARRMONY_SNOUTY_MODE=traditional zarrmony convert /path/to/…_ht_sols_snap ./out
@@ -352,7 +395,8 @@ for the remaining unsupported shape.
   multi-channel wiring.
 - **v0.3** — ✅ top-level `*_ht_sols_gui/` directory as multi-scene input,
   one output store per non-empty subdir; ✅ in-process GPU `traditional`
-  transform behind an `engine` selector, with a CPU fallback.
+  transform behind an `engine` selector, with a CPU fallback; ✅ **BREAKING**
+  the default mode is now `desheared` and not `raw`.
 
 ## Why a separate package?
 

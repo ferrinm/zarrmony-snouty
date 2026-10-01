@@ -1,7 +1,13 @@
 # ADR-0002: In-process GPU for `traditional` only, with an up-front engine decision
 
 Date: 2026-09-24
-Status: Accepted
+Status: Accepted. Amended 2026-10-01 — see
+[Amendment (2026-10-01)](#amendment-2026-10-01).
+
+> **Read the amendment before you read the Consequences section.** Measurement
+> refuted the central performance prediction. The amendment also corrects two
+> numbers, records the engine-selection rule, and fills one silence. All seven
+> decisions survive.
 
 ## Context
 
@@ -91,16 +97,23 @@ the input volume alone costs more than that. `snouty-folder` reaches the same
 conclusion: its `write_desheared_ome_tif` calls `_per_slice_cpu_deshear`
 unconditionally, and cupy appears only inside `_affine_rotate`.
 
+**Amended 2026-10-01.** `desheared` is now the default mode, so the default
+convert runs on the CPU on every host. See
+[A6](#a6-decision-6-shipped-and-the-default-mode-runs-on-the-cpu-11).
+
 ### 3. Concurrency: one GPU transform at a time
 
 A module-level lock serializes GPU work. Dask's default scheduler runs
 `os.cpu_count()` threads, and each `traditional` task holds a 1.74 GB desheared
-intermediate plus a 2.43 GB output on the device, or 4.17 GB. A 24 GB card fits
-about five. Sixteen threads demand 67 GB. cupy's default memory pool retains
-freed blocks, so unbounded concurrency exhausts the device.
+intermediate plus a 2.43 GB output on the device, or 4.17 GB. The measured card
+holds **23.46 GiB** and fits five. Sixteen threads demand 67 GB. cupy's default
+memory pool retains freed blocks, so unbounded concurrency exhausts the device.
 
 The lock fixes device demand at 4.17 GB whatever the thread count, and lets the
 memory pool reuse the same blocks on every iteration.
+
+**Amended 2026-10-01.** The 23.46 GiB figure above replaces an earlier estimate
+of 24 GB. See [A2](#a2-decision-3-names-the-wrong-card-size-18).
 
 ### 4. Fallback semantics: decided once, in `__init__`
 
@@ -129,6 +142,10 @@ An error is also the more useful signal inside a paid GPU allocation. A run that
 quietly drops to 13.56 s per timepoint at timepoint 90 wastes the allocation and
 hides a sick node.
 
+**Amended 2026-10-01.** This decision settles *when* the engine is chosen. It
+does not settle what `auto` does across a multi-scene session. For that rule,
+see [A4](#a4-the-engine-selection-rule-10).
+
 ### 5. Engine kwarg surface
 
 `SnoutyReader(path, mode=..., engine=...)` accepts `"auto" | "cpu" | "gpu"` and
@@ -155,6 +172,10 @@ in the audit.
 
 ### 6. Default mode flips from `raw` to `desheared`
 
+**Implemented.** The flip merged as `fde84a0`, PR #28, issue #11. See
+[A5](#a5-decision-6s-storage-table-under-predicts-the-store-11) and
+[A6](#a6-decision-6-shipped-and-the-default-mode-runs-on-the-cpu-11).
+
 This ADR ratifies the flip in issue #11, but not its stated reason. The issue
 argues that GPU acceleration makes deshearing cheap enough to default to. That
 argument is void, because `deshear` has no GPU path. The flip stands on three
@@ -174,6 +195,10 @@ other grounds:
 | ------- | ------------------- | ------- | ------------------------ |
 | A (`scan_step_size_px: 2`) | 2.39x | 58% | 1.00x |
 | B (`scan_step_size_px: 1`) | 5.27x | 81% | 1.00x |
+
+**Amended 2026-10-01.** The 1.00x prediction holds for the array and fails for
+the whole store, which grew 1.23x. See
+[A5](#a5-decision-6s-storage-table-under-predicts-the-store-11).
 
 `traditional` is not the default. A converter's default output must not destroy
 information, and `traditional` is a lossy rendering. Lossy renderings stay
@@ -199,7 +224,9 @@ script, or `SLURMCluster` configuration.
   because nothing sets them during compute.
 - Device memory demand is a fixed 4.17 GB at this geometry, independent of host
   core count. The GPU path behaves the same on a 4-core and a 64-core node.
-- The default flip costs nothing on disk.
+- The default flip costs nothing on disk. **Amended 2026-10-01.** True of the
+  array. The whole store grew 1.23x, for a reason unrelated to the padding.
+  See [A5](#a5-decision-6s-storage-table-under-predicts-the-store-11).
 
 ### Negative
 
@@ -207,17 +234,20 @@ script, or `SLURMCluster` configuration.
   faster route exists. The README must document the `sbatch` wrapper.
 - A transient CUDA fault fails the whole convert. The user re-runs. We accept
   restart cost in exchange for a reportable engine.
-- The GPU advantage over a many-core CPU node is modest. Serialized GPU work is
-  PCIe-bound at an estimated 0.3 to 0.5 s per timepoint, and CPU work is
-  13.56 s divided by the thread count. The GPU wins clearly on a 16-core node
-  and loses on a 64-core node. This estimate is not yet measured on real
-  hardware.
+- ~~The GPU advantage over a many-core CPU node is modest.~~ **Refuted
+  2026-10-01 by #18. See
+  [A1](#a1-the-central-performance-prediction-is-refuted-18).** On a real
+  device the serialized GPU delivers 2.55x the best CPU throughput. CPU
+  throughput peaks at 8 threads and degrades above it, so a wider node does
+  not close the gap. Ask for 8 to 16 cores next to the card, not 64.
 - The default flip raises host memory per task from 0.73 GB to 2.47 GB for
   `desheared`, and to 4.90 GB for `traditional`. Sixteen threads want 40 GB and
   78 GB. The reference allocation provided 62 GB. Host-side concurrency needs
   its own bound, tracked in
   [#15](https://github.com/ferrinm/zarrmony-snouty/issues/15) rather than here.
   It must land with #11, because the default flip is what makes it reachable.
+  **Discharged 2026-10-01.** #15 landed as `09810fe`, PR #22. #11 landed as
+  `fde84a0`, PR #28.
 
 ### Reversibility
 
@@ -240,6 +270,135 @@ script, or `SLURMCluster` configuration.
 | Unbounded GPU concurrency with an `OutOfMemoryError` catch | Nondeterministic. Failed tasks then contend for host RAM against tasks that succeeded, and cupy's pool thrashes. |
 | `traditional` as the new default | Costs 91x `deshear` and discards information irreversibly through `order=0` resampling. |
 | `device=` instead of `engine=` for the kwarg | `device` conventionally names a specific device such as `cuda:0`, which invites requests this plugin does not serve. |
+
+## Amendment (2026-10-01)
+
+Construction and measurement corrected parts of this ADR. All seven decisions
+survive. Decision 1 (in-process cupy), decision 2 (`traditional` only) and
+decision 7 (no SLURM configuration surface) shipped unchanged. What follows
+corrects the predictions, two of the numbers, and one silence. It also records
+what shipped. This is an amendment and not a replacement ADR, because the
+design did not change.
+
+Sources: [#18](https://github.com/ferrinm/zarrmony-snouty/issues/18) supplies
+the measurements, [#10](https://github.com/ferrinm/zarrmony-snouty/issues/10)
+the engine rule, and
+[#11](https://github.com/ferrinm/zarrmony-snouty/issues/11) the storage figures
+and the shipped default flip.
+
+### A1. The central performance prediction is refuted (#18)
+
+The Consequences section predicted this:
+
+> The GPU wins clearly on a 16-core node and loses on a 64-core node. This
+> estimate is not yet measured on real hardware.
+
+#18 measured it on a real TITAN RTX, at acquisition A geometry. The GPU wins
+outright. The reason is absent from the decisions above: CPU throughput peaks
+at 8 threads and then degrades.
+
+| configuration | tasks/s |
+| ------------- | ------- |
+| CPU, 8 threads | 0.192 |
+| CPU, 16 threads | 0.167 |
+| CPU, 32 threads | 0.124 |
+| GPU, serialized | **0.490** |
+
+The GPU delivers **2.55x** the best figure the CPU reaches. The degradation
+above 8 threads looks like memory-bandwidth saturation. Each task streams about
+4.9 GB. The 16-thread row used 78 GB of a 220 GB allocation, so host-memory
+pressure does not explain it. The 32-thread row used about 157 GB, where
+allocator pressure can contribute.
+
+A 64-core node does not help this workload. The node-size caveat in the
+Consequences section is withdrawn. Ask for 8 to 16 cores next to the card.
+
+### A2. Decision 3 names the wrong card size (#18)
+
+Decision 3 reasoned about "a 24 GB card". The measured device is an NVIDIA
+TITAN RTX with 25189679104 bytes of device memory, or **23.46 GiB**. The
+decision survives, because 4.17 GB per task still fits five times. Decision 3
+now reads 23.46 GiB. Do not budget against 24 GB.
+
+### A3. The two engines do not write identical pixels (#18)
+
+The decisions above are silent on numerical equivalence. The two engines are
+not interchangeable. #18 classified the whole disagreement:
+
+- 43,492 of 1,213,170,000 voxels differ, or **0.0036%**. They lie on **29
+  lines** of the 808,780 lines in the rotated grid.
+- **28 lines are nearest-neighbor ties.** The source coordinate falls within
+  `6e-5` of a half-integer. Both answers are valid. Neither engine is wrong.
+- **1 line is a fill-value disagreement** at source coordinate exactly `0.0`.
+  scipy reads the first plane. cupy returns `0`. **The GPU drops 1500 real
+  voxels at the outermost non-empty edge plane.**
+
+This is a known deviation, and the project accepts it. `README.md`,
+`CHANGELOG.md` and the `traditional_zyx` docstring in `_deshear_gpu` all record
+it. It is the premise of A4.
+
+### A4. The engine-selection rule (#10)
+
+Decision 4 settles *when* the engine is chosen. It does not settle what `auto`
+does across a multi-scene session, because the engine disagreement was unknown
+at the time. #18 proved the disagreement and #10 settled the rule. The rule
+belongs here:
+
+- **`engine="auto"` is all-or-nothing per convert.** One engine covers every
+  child of a session. The size comes from the largest child. No store ever
+  mixes engines. The accepted cost is that the same command writes different
+  bytes on a GPU host and on a CPU host.
+- **Explicit `engine="gpu"` is strict about the environment and best-effort
+  about capacity.** It raises `SnoutyEngineError` when cupy or the device is
+  absent. On a capacity shortfall it falls back to the CPU, per scene.
+- **The difference between the two rules is consent.** A caller who expresses
+  no preference never meets a hardware error. A caller who names the GPU
+  learns when the environment cannot deliver one.
+
+#10 also discharged a consequence of this rule. The session reader parses one
+sidecar per child during `__init__` to size the device demand. That reads like
+a contradiction of `_shallow_validate`, which promises no metadata parsing. It
+is not one:
+
+- `_shallow_validate` itself still parses nothing.
+- The sizing walk is a separate step. It runs only in `traditional` mode, and
+  only on a host where a device answered.
+- A child whose sidecar does not parse drops out of the walk and keeps its own
+  lazy error.
+
+### A5. Decision 6's storage table under-predicts the store (#11)
+
+The decision 6 table predicts **1.00x** on-disk growth. #11 measured a real
+48-plane snap end to end. The prediction holds for the array. It fails for the
+store.
+
+| | raw | desheared | ratio |
+| --- | --- | --- | --- |
+| voxels | 13,824,000 | 37,512,000 | 2.71x |
+| level 0 bytes | 15,061,674 | 15,048,616 | **1.00x** |
+| whole store | 15,068,238 | 18,562,858 | **1.23x** |
+
+The padding argument is sound. The store grew for an unrelated reason. The
+taller array crossed zarrmony's threshold for a second pyramid level, which
+added 3.5 MB. The downsample step mixes padding with signal, so that level does
+not compress the way pure padding does.
+
+Decision 6 measured a sub-volume and never wrote a store, so the pyramid does
+not appear in its figures. Anyone who sizes storage from the decision 6 table
+must add the extra pyramid level.
+
+### A6. Decision 6 shipped, and the default mode runs on the CPU (#11)
+
+Decision 6 is implemented. The flip merged as `fde84a0`, PR #28, issue #11. The
+Negative bullet that requires the host-memory bound to land with #11 is
+discharged, because #15 landed first as `09810fe`, PR #22.
+
+One result of the flip deserves a plain statement. Decision 2 scopes the GPU to
+`traditional`, and `desheared` has no GPU path. `desheared` is now the default
+mode. **The default convert therefore runs on the CPU on every host, with a
+card or without one.** A PCIe upload of the input volume alone costs more than
+the 0.15 s CPU deshear. That is the correct outcome, not a gap. Only
+`mode="traditional"` reaches the GPU.
 
 ## References
 
@@ -264,3 +423,13 @@ script, or `SLURMCluster` configuration.
   [#11](https://github.com/ferrinm/zarrmony-snouty/issues/11) (default flip).
   [#9](https://github.com/ferrinm/zarrmony-snouty/issues/9) (`_slurm.py`) is
   closed by decision 1.
+- Amendment sources:
+  [#18](https://github.com/ferrinm/zarrmony-snouty/issues/18) (the first
+  measurement on a real device, and the source of A1, A2 and A3),
+  [#10](https://github.com/ferrinm/zarrmony-snouty/issues/10) (the engine rule
+  in A4), [#11](https://github.com/ferrinm/zarrmony-snouty/issues/11) (the
+  storage figures in A5 and the shipped flip in A6), and
+  [#15](https://github.com/ferrinm/zarrmony-snouty/issues/15) (the host-memory
+  bound discharged in A6).
+  [#30](https://github.com/ferrinm/zarrmony-snouty/issues/30) specified the
+  amendment itself.

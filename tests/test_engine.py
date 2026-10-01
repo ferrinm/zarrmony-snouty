@@ -16,6 +16,7 @@ a real acquisition, and they skip everywhere else.
 from __future__ import annotations
 
 import os
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -25,8 +26,8 @@ from tests.conftest import write_synthetic_snouty
 from zarrmony_snouty import _deshear, _deshear_gpu, _open, _open_session
 from zarrmony_snouty._errors import SnoutyEngineError
 from zarrmony_snouty._metadata import SnoutyMetadataError, parse_metadata_dir
-from zarrmony_snouty.adapter import SnoutyReader
-from zarrmony_snouty.session import SnoutySessionReader
+from zarrmony_snouty.adapter import SnoutyReader, SnoutyVolumesPerBufferUnsupportedError
+from zarrmony_snouty.session import SnoutySessionReader, SnoutySubdirSkippedWarning
 
 
 @pytest.fixture
@@ -509,12 +510,39 @@ def test_real_session_resolves_one_engine_for_every_scene() -> None:
     """The all-or-nothing rule against a real card and real geometries.
 
     The synthetic version stubs the free-byte figure. This one asks the
-    driver. Whichever engine the card allows, every scene must report the
-    same one, and the same reason.
+    driver. Whichever engine the card allows, every readable scene must
+    report the same one, and the same reason.
+
+    A real session holds children this reader does not support. One has an
+    empty ``data/`` directory, which the shallow validator drops with a
+    warning. One has ``volumes_per_buffer > 1``, which raises on the
+    ``set_scene`` that commits to it. Both are documented behaviour, and
+    neither says anything about engine resolution, so both are counted and
+    stepped over. ``tests/test_session_adapter.py`` covers them.
     """
     session_dir = _real_dir(REAL_SESSION_ENV_VAR)
 
-    reader = SnoutySessionReader(session_dir, mode="traditional", engine="auto")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SnoutySubdirSkippedWarning)
+        reader = SnoutySessionReader(session_dir, mode="traditional", engine="auto")
 
-    decisions = set(_engine_per_scene(reader))
+    decisions = set()
+    readable = 0
+    unsupported = 0
+    for index in range(len(reader.scenes)):
+        try:
+            reader.set_scene(index)
+        except SnoutyVolumesPerBufferUnsupportedError:
+            unsupported += 1
+            continue
+        readable += 1
+        decisions.add((reader.engine_used, reader.engine_fallback_reason))
+
+    # One readable scene agrees with itself, so it proves nothing. Skip
+    # rather than pass, and say which fixture was too thin.
+    if readable < 2:
+        pytest.skip(
+            f"{session_dir} has {readable} readable scene(s) and "
+            f"{unsupported} unsupported; the all-or-nothing rule needs two"
+        )
     assert len(decisions) == 1, f"the session mixed engines: {decisions}"

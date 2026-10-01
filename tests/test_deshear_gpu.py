@@ -67,6 +67,38 @@ def test_free_device_bytes_is_none_without_cupy():
     assert _deshear_gpu.free_device_bytes() is None
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [(12040, "12.4"), (11080, "11.8"), (12000, "12.0")],
+)
+def test_cuda_runtime_version_decodes_the_cuda_integer(monkeypatch, raw, expected):
+    """CUDA packs its version as ``1000 * major + 10 * minor``.
+
+    The three pairs come from the CUDA release table, not from the decode
+    under test. ``_raw_runtime_version`` is the one leaf that needs a driver,
+    so substituting it makes the decode checkable on a host with no card.
+    """
+    monkeypatch.setattr(_deshear_gpu, "_raw_runtime_version", lambda: raw)
+    assert _deshear_gpu.cuda_runtime_version() == expected
+
+
+@pytest.mark.skipif(_deshear_gpu.cupy_available, reason="cupy is installed")
+def test_device_library_versions_are_none_without_cupy():
+    """Same "unknowable" convention as ``free_device_bytes``. The audit stores
+    the ``None``, so a reader can tell "no cupy" from "nobody recorded it"."""
+    assert _deshear_gpu.cupy_version() is None
+    assert _deshear_gpu.cuda_runtime_version() is None
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not _deshear_gpu.cupy_available, reason="cupy is not installed")
+def test_device_library_versions_are_strings_on_a_real_device():
+    """The audit record must carry readable versions, not objects that only
+    repr well."""
+    assert isinstance(_deshear_gpu.cupy_version(), str)
+    assert isinstance(_deshear_gpu.cuda_runtime_version(), str)
+
+
 @pytest.mark.gpu
 @pytest.mark.skipif(not _deshear_gpu.cupy_available, reason="cupy is not installed")
 def test_free_device_bytes_is_positive_on_a_real_device():

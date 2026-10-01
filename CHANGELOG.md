@@ -9,10 +9,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **`engine` selector on both readers** (#10). `SnoutyReader` and
+  `SnoutySessionReader` take `engine="auto" | "cpu" | "gpu"`, which wires the
+  `_deshear_gpu` module from #8 into the reader for the first time. *Mode* is
+  the output geometry. *Engine* is where it computes.
+  - `auto` is the default, and it picks the GPU only when the mode, the
+    host, and the card all allow it. A CPU-only install keeps writing exactly
+    the pixels v0.2 wrote.
+  - The difference between `auto` and an explicit `gpu` is consent. `auto`
+    never fails over hardware. An explicit `gpu` raises `SnoutyEngineError`
+    on a wrong environment (no cupy, or no device), and falls back silently
+    to the CPU on a capacity shortfall, because one oversized scene is a
+    poor reason to abandon a long convert.
+  - `traditional` only (ADR-0002, decision 2). `engine="gpu"` on `raw` or
+    `desheared` is not an error. The reader runs on the CPU and reports
+    `mode '<mode>' has no GPU path`.
+  - Resolution happens once, in the constructor, before any pixel work.
+    New `reader.engine_used` and `reader.engine_fallback_reason`.
+  - **Sessions resolve all-or-nothing under `auto`.** One engine covers every
+    child, sized from the largest child, so a single session never mixes
+    engines. An explicit `engine="gpu"` resolves per child instead.
+  - New `ZARRMONY_SNOUTY_ENGINE` env var on both plugin `open` shims, with
+    the same contract as `ZARRMONY_SNOUTY_MODE`. An unknown value raises
+    `SnoutyEngineError`.
+  - `acquisition_audit` now carries a `zarrmony_snouty` block with
+    `engine_used`, `engine_fallback_reason`, `cupy_version` and
+    `cuda_runtime_version`, so a store records which engine wrote it. The
+    two engines do not write identical pixels (#18), so this is provenance
+    and not decoration. `SnoutySessionReader` gained `acquisition_audit`
+    delegation, which also fixes a pre-existing gap: session converts
+    previously dropped the static `imaging_method` and `microscope` fields.
+  - A child whose sidecar does not parse no longer takes down a session at
+    construction. Device sizing reads every child's geometry, and a child it
+    cannot measure drops out of the sizing and keeps its lazy error.
 - **GPU `traditional` transform** (#8). New internal `_deshear_gpu` module,
   the cupy counterpart to `_deshear.traditional_zyx`, ported from the same
   source ([`snouty-folder`](https://github.com/aelefebv/snouty-folder),
-  `SnoutyFolder._affine_rotate`). No reader wiring yet — that is #10.
+  `SnoutyFolder._affine_rotate`). Wired into the reader by #10, above.
   - `traditional` only, per ADR-0002 decision 2. The deshear stays on the
     CPU, so only the desheared array crosses the PCIe bus.
   - cupy is a **soft import**. The module loads on a CPU-only install and

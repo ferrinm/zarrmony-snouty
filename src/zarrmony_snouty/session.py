@@ -14,6 +14,12 @@ parse (missing sidecar fields, ``volumes_per_buffer > 1``, malformed XY
 list, etc.) propagate normally — by the time the caller has committed to
 reading a scene, warn-and-continue would silently drop pixel data.
 
+One step at ``__init__`` time does read sidecars: engine resolution reads
+each child's geometry to size the device, but only in ``traditional`` mode
+on a host where cupy imported and a device answered. That read never
+raises. A child whose sidecar does not parse drops out of the sizing and
+keeps its lazy error, so the rule above holds on every host.
+
 Subdirs that fail the shallow ``data/`` + ``metadata/`` check emit a
 :class:`SnoutySubdirSkippedWarning` at ``__init__`` time and are dropped
 from ``scenes``. A session with **zero** surviving children raises
@@ -39,9 +45,13 @@ from typing import Literal
 import numpy as np
 import xarray as xr
 
+from . import _engine
+from ._engine import Engine, ResolvedEngine
+from ._metadata import SnoutyMetadataError, parse_metadata_dir
 from .adapter import (
     _MODES,
     _XY_POSITION_LIST_FILENAME,
+    DTYPE,
     Mode,
     SnoutyDataError,
     SnoutyModeError,
@@ -98,9 +108,10 @@ def _shallow_validate(subdir: Path) -> _SkipReason | None:
     """Return ``None`` if the subdir looks like a valid Snouty acquisition,
     or a machine-parseable reason token if it doesn't.
 
-    Cheap by design: at most one ``iterdir()`` per subdir check. No metadata
-    parsing, no ``.tif`` header reads — those happen lazily when the caller
-    actually opens the scene.
+    Cheap by design: at most one ``iterdir()`` per subdir check. This
+    function parses no metadata and reads no ``.tif`` header. It answers from
+    directory listings alone, because it runs for every candidate subdir,
+    including the ones it is about to reject.
     """
     data_dir = subdir / "data"
     metadata_dir = subdir / "metadata"
@@ -127,11 +138,12 @@ class SnoutySessionReader:
     layout_hint = "flat"
     plate_layout = None
 
-    def __init__(self, path: Path, mode: Mode = "raw") -> None:
+    def __init__(self, path: Path, mode: Mode = "raw", *, engine: Engine = "auto") -> None:
         if mode not in _MODES:
             raise SnoutyModeError(
                 f"unknown SnoutyReader mode {mode!r}; expected one of {list(_MODES)}"
             )
+        _engine.validate(engine)
         self._dir = Path(path)
         self._mode: Mode = mode
 
@@ -206,7 +218,50 @@ class SnoutySessionReader:
                 self.scenes.append(scene_name)
                 self._scene_map.append((child_idx, per_idx))
 
+        self._engine_decisions = self._resolve_engines(engine)
         self._active = 0
+
+    def _resolve_engines(self, engine: Engine) -> list[tuple[ResolvedEngine, str | None]]:
+        """Decide the engine for every child before the first one is built.
+
+        Two rules, and the difference between them is consent (issue #10).
+
+        ``auto`` is all-or-nothing: one engine for the whole session, sized
+        from the largest child, pushed to every child. One output store never
+        mixes engines, because the CPU and the GPU do not produce identical
+        pixels (#18).
+
+        An explicit ``engine="gpu"`` is best-effort per scene: a child that
+        does not fit the card runs on the CPU while the others run on the
+        GPU. The caller asked for that engine deliberately, so one oversized
+        scene shifts rather than failing the convert.
+        """
+        if engine == "auto":
+            decision = _engine.resolve(engine, self._mode, self._largest_child_bytes)
+            return [decision] * len(self._children_dirs)
+        return [
+            _engine.resolve(engine, self._mode, lambda d=subdir: self._child_bytes(d))
+            for subdir in self._children_dirs
+        ]
+
+    def _child_bytes(self, subdir: Path) -> int:
+        """Device bytes this child's ``traditional`` transform needs, or 0.
+
+        Zero means "could not measure it", and that is the only honest answer
+        for a child whose sidecar does not parse. Such a child raises on the
+        ``set_scene`` that commits to it, which is the behaviour this module
+        documents, so the engine it was nominally assigned never applies to
+        any pixels. Sizing must not be the step that turns that scene-level
+        failure into a session-level one.
+        """
+        try:
+            meta = parse_metadata_dir(subdir / "metadata")
+        except SnoutyMetadataError:
+            return 0
+        return _engine.required_device_bytes(meta, itemsize=DTYPE.itemsize)
+
+    def _largest_child_bytes(self) -> int:
+        return max(self._child_bytes(subdir) for subdir in self._children_dirs)
 
     def _resolve_child_xy(
         self, subdir: Path, is_single_position: bool, n_positions: int
@@ -254,6 +309,7 @@ class SnoutySessionReader:
             reader = SnoutyReader(
                 self._children_dirs[child_idx],
                 mode=self._mode,
+                engine_decision=self._engine_decisions[child_idx],
                 xy_positions=self._child_xy_positions[child_idx],
             )
             self._readers[child_idx] = reader
@@ -284,8 +340,23 @@ class SnoutySessionReader:
         return self._active_child().dtype
 
     @property
+    def engine_used(self) -> ResolvedEngine:
+        return self._active_child().engine_used
+
+    @property
+    def engine_fallback_reason(self) -> str | None:
+        return self._active_child().engine_fallback_reason
+
+    @property
     def metadata(self) -> str:
         return self._active_child().metadata
+
+    @property
+    def acquisition_audit(self) -> dict:
+        """Delegate per scene, so each output store records the engine that
+        wrote it. An explicit ``engine="gpu"`` can mix engines across one
+        session, and the audit is what explains the mix afterwards."""
+        return self._active_child().acquisition_audit
 
     def close(self) -> None:
         for reader in self._readers:

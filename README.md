@@ -123,9 +123,130 @@ ZARRMONY_SNOUTY_MODE=traditional zarrmony convert /path/to/…_ht_sols_snap ./ou
 ```
 
 Unrecognized values raise a `SnoutyModeError`. Deshear and traditional-view
-are ported (CPU-only) from Austin Lefebvre's
-[`snouty-folder`](https://github.com/aelefebv/snouty-folder); GPU paths are
-intentionally out of scope.
+are ported from Austin Lefebvre's
+[`snouty-folder`](https://github.com/aelefebv/snouty-folder). Mode controls
+the output geometry only. See **Engine** below for where it computes.
+
+### Engine: where the transform computes
+
+*Mode* is the output geometry. *Engine* is where it computes. The two are
+separate kwargs and separate decisions.
+
+`engine` takes three values:
+
+- `auto` (default) — use the GPU when the mode, the host, and the card all
+  allow it. Otherwise use the CPU and record the reason.
+- `cpu` — always the CPU. This is the v0.2 behaviour, unchanged.
+- `gpu` — use the GPU, and raise when the environment cannot.
+
+Only `traditional` has a GPU path, per
+[ADR-0002](docs/adr/0002-gpu-deshear-execution-model.md). `raw` runs no
+transform at all. A GPU `desheared` costs more in PCIe upload than the whole
+CPU deshear costs. `engine="gpu"` on either of those modes is not an error.
+The reader runs on the CPU and reports why.
+
+```python
+from zarrmony_snouty import SnoutyReader
+
+reader = SnoutyReader("/path/to/…_ht_sols_snap", mode="traditional", engine="gpu")
+reader.engine_used  # "gpu"
+reader.engine_fallback_reason  # None
+```
+
+For CLI use, set `ZARRMONY_SNOUTY_ENGINE`:
+
+```bash
+ZARRMONY_SNOUTY_MODE=traditional ZARRMONY_SNOUTY_ENGINE=gpu \
+  zarrmony convert /path/to/…_ht_sols_snap ./out
+```
+
+An unrecognized value raises a `SnoutyEngineError`.
+
+#### How `auto` and `gpu` differ
+
+The difference is consent. `auto` never fails over hardware, because the
+caller expressed no preference. An explicit `gpu` is strict about the
+environment and forgiving about capacity.
+
+| condition | `auto` | `gpu` |
+| --- | --- | --- |
+| the mode has no GPU path | CPU, with a reason | CPU, with a reason |
+| cupy is not installed | CPU, with a reason | raises `SnoutyEngineError` |
+| no CUDA device answers | CPU, with a reason | raises `SnoutyEngineError` |
+| the scene exceeds free device memory | CPU, with a reason | CPU, with a reason |
+
+A missing cupy means that a person must fix the environment. A card that is
+too small for one scene is not a broken environment, so that scene moves to
+the CPU and the convert continues.
+
+Resolution happens once, in the constructor, before any pixel work. Read
+`reader.engine_used` and `reader.engine_fallback_reason` for the result.
+
+#### Sessions
+
+A session convert writes one output store per child. `engine="auto"` picks
+one engine for **every** child in the session, sized from the largest child.
+A single session never mixes engines under `auto`. An explicit `engine="gpu"`
+decides per child, so one oversized child runs on the CPU while the rest run
+on the GPU.
+
+#### The two engines do not write identical pixels
+
+**Do not compare a GPU store against a CPU store byte for byte.** `scipy` and
+`cupy` disagree.
+
+At the measured geometry 0.0036% of voxels differ: 43,492 of 1,213,170,000,
+on 29 lines of the 808,780 in the rotated grid. 28 of those lines are
+nearest-neighbour ties, where the two libraries pick opposite equidistant
+voxels and both answers are equally valid. **One line is a real loss.** Its
+source coordinate is exactly `0.0`. `scipy` reads the first plane there and
+`cupy` returns the fill value, so the GPU drops 1500 voxels at the outermost
+non-empty edge plane. Measured on real hardware in #18.
+
+Every output store records the engine that wrote it. The reader contributes
+this block to the zarrmony acquisition audit:
+
+```json
+{"zarrmony_snouty": {
+  "engine_used": "gpu",
+  "engine_fallback_reason": null,
+  "cupy_version": "13.4.1",
+  "cuda_runtime_version": "12.4"
+}}
+```
+
+#### Installing cupy
+
+There is no `gpu` extra. cupy wheels are pinned to a CUDA major version, and
+the generic `cupy` source distribution needs a local CUDA toolchain to build.
+Install the wheel that matches the CUDA runtime on the host:
+
+```bash
+pip install cupy-cuda12x   # for a CUDA 12.x runtime
+```
+
+#### Running on a GPU node
+
+Measured throughput is **2.55x the best figure the CPU reaches**. The CPU
+transform stops scaling at 8 threads and gets slower above that, so a wider
+node does not close the gap. Ask for 8 to 16 cores next to the card. More
+cores cost allocation time and return nothing.
+
+The reader submits no jobs of its own (ADR-0002, decision 1). It runs inside
+the job that you submit. Wrap the convert in your scheduler's submit script,
+and fill in your own partition and account:
+
+```bash
+#!/bin/bash
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64G
+# Add your own --partition and --account here.
+
+export ZARRMONY_SNOUTY_MODE=traditional
+export ZARRMONY_SNOUTY_ENGINE=auto
+zarrmony convert /mnt/readonly/<dataset>/…_ht_sols_gui ./out
+```
 
 ### Host memory for the transform modes
 
@@ -207,10 +328,12 @@ for the remaining unsupported shape.
   reader raises `SnoutyVolumesPerBufferUnsupportedError` when it sees
   `volumes_per_buffer > 1` in the sidecar. This propagates through
   session-level convert on the first subdir it sees with `vpb > 1`.
-- **No GPU deshear/rotate.** Only the CPU paths from
-  [`snouty-folder`](https://github.com/aelefebv/snouty-folder) are ported.
-  `traditional` mode uses `scipy.ndimage.affine_transform`; cupy is
-  intentionally not a dependency.
+- **No GPU deshear.** `desheared` runs on the CPU on every host. The GPU path
+  covers `traditional` only (ADR-0002, decision 2). A GPU deshear costs more
+  in PCIe upload than the CPU deshear costs outright.
+- **cupy is a soft dependency, and there is no `gpu` extra.** `pip install
+  zarrmony-snouty` installs no CUDA. Install a matching cupy wheel yourself
+  to get a GPU path. See **Engine** above.
 - **No HCS-plate output.** Sessions whose `XY_stage_position_list.txt`
   describes a well-plate scan-order still surface as a flat scene list.
   Plate-shape detection and OME-NGFF HCS output are tracked for a later
@@ -228,7 +351,8 @@ for the remaining unsupported shape.
   multi-timepoint T-concat, multi-position (one scene per position),
   multi-channel wiring.
 - **v0.3** — ✅ top-level `*_ht_sols_gui/` directory as multi-scene input,
-  one output store per non-empty subdir.
+  one output store per non-empty subdir; ✅ in-process GPU `traditional`
+  transform behind an `engine` selector, with a CPU fallback.
 
 ## Why a separate package?
 

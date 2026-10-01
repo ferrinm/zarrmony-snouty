@@ -24,11 +24,13 @@ multiple volumes stacked inside one ``.tif``) still raises
 ``SnoutyVolumesPerBufferUnsupportedError``: the buffer-frame layout inside
 a single ``.tif`` has not been verified against a real fixture.
 
-Three output modes are available via the ``mode`` kwarg (default ``"raw"``
-preserves v0.1 behavior). ``"desheared"`` and ``"traditional"`` port the CPU
-paths of ``snouty_folder.SnoutyFolder`` (see Austin Lefebvre's
-``snouty-folder`` package at https://github.com/aelefebv/snouty-folder) —
-see :mod:`zarrmony_snouty._deshear`.
+Three output modes are available via the ``mode`` kwarg. The default is
+``"desheared"`` as of v0.3; it was ``"raw"`` through v0.2, and the flip is
+breaking. Pass ``mode="raw"`` to get the pre-v0.3 output. ``"desheared"`` and
+``"traditional"`` port the CPU paths of ``snouty_folder.SnoutyFolder`` (see
+Austin Lefebvre's ``snouty-folder`` package at
+https://github.com/aelefebv/snouty-folder) — see
+:mod:`zarrmony_snouty._deshear`.
 """
 
 from __future__ import annotations
@@ -55,6 +57,16 @@ from ._metadata import SnoutyMetadata, parse_metadata_dir
 
 Mode = Literal["raw", "desheared", "traditional"]
 _MODES: tuple[Mode, ...] = ("raw", "desheared", "traditional")
+
+#: The mode a caller gets when they name none. One constant, so the two
+#: readers and the plugin shim cannot drift apart.
+#:
+#: ``desheared`` since v0.3, and the flip is breaking. It is the cheapest
+#: mode that yields an axis-aligned volume: 0.15 s per timepoint, every input
+#: voxel preserved exactly once, and the padding compresses to nothing. See
+#: issue #11. ``traditional`` is not the default because it resamples with
+#: nearest-neighbour and does not invert.
+DEFAULT_MODE: Mode = "desheared"
 
 #: Snouty PCO output is always 16-bit. One constant so the dask graph, the
 #: ``dtype`` property, and the device-memory estimate cannot drift apart.
@@ -197,7 +209,7 @@ class SnoutyReader:
     def __init__(
         self,
         path: Path,
-        mode: Mode = "raw",
+        mode: Mode = DEFAULT_MODE,
         *,
         engine: Engine = "auto",
         engine_decision: tuple[ResolvedEngine, str | None] | None = None,

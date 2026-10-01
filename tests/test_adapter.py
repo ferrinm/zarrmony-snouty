@@ -53,7 +53,7 @@ def test_metadata_round_trips_verbatim(synthetic_snouty) -> None:
 
 
 def test_xarray_dims_and_shape(synthetic_snouty) -> None:
-    reader = SnoutyReader(synthetic_snouty.dir)
+    reader = SnoutyReader(synthetic_snouty.dir, mode="raw")
     xr_da = reader.xarray_dask_data
     assert xr_da.dims == ("T", "C", "Z", "Y", "X")
     assert xr_da.shape == (
@@ -67,7 +67,7 @@ def test_xarray_dims_and_shape(synthetic_snouty) -> None:
 
 
 def test_xarray_crops_timestamp_strip_and_preserves_content(synthetic_snouty) -> None:
-    reader = SnoutyReader(synthetic_snouty.dir)
+    reader = SnoutyReader(synthetic_snouty.dir, mode="raw")
     computed = reader.xarray_dask_data.data.compute()
     # Values in the cropped region match the per-plane fill; timestamp
     # sentinel (9999) must be gone.
@@ -122,7 +122,7 @@ def test_multi_position_shape_composes_with_multi_timepoint(tmp_path: Path) -> N
         n_positions=2,
         n_timepoints=2,
     )
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     assert reader.scenes == [
         f"{fixture.dir.name}__p000000",
         f"{fixture.dir.name}__p000001",
@@ -141,7 +141,7 @@ def test_multi_position_content_matches_position_and_timepoint(tmp_path: Path) -
         n_positions=2,
         n_timepoints=2,
     )
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     for scene_index, p in enumerate((0, 1)):
         reader.set_scene(scene_index)
         computed = reader.xarray_dask_data.data.compute()
@@ -297,7 +297,7 @@ def test_volumes_per_buffer_greater_than_one_raises(tmp_path: Path) -> None:
 
 def test_multi_channel_shape_and_channel_names(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     xr_da = reader.xarray_dask_data
     assert xr_da.dims == ("T", "C", "Z", "Y", "X")
     assert xr_da.shape == (1, 2, fixture.size_z, fixture.size_y, fixture.size_x)
@@ -311,7 +311,7 @@ def test_multi_channel_content_ordering(tmp_path: Path) -> None:
     # is correct). If the axes were swapped or transposed, the fills would
     # land at the wrong (c, z) positions.
     fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"))
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     computed = reader.xarray_dask_data.data.compute()
     for c in range(len(fixture.channels)):
         for z in range(fixture.size_z):
@@ -362,7 +362,7 @@ def test_multi_channel_traditional_computes(tmp_path: Path) -> None:
 
 def test_multi_channel_multi_timepoint(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"), n_timepoints=2)
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     xr_da = reader.xarray_dask_data
     assert xr_da.shape == (2, 2, fixture.size_z, fixture.size_y, fixture.size_x)
     computed = xr_da.data.compute()
@@ -375,7 +375,7 @@ def test_multi_channel_multi_timepoint(tmp_path: Path) -> None:
 
 def test_multi_channel_multi_position(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path, channels=("488", "561"), n_positions=2)
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     assert reader.scenes == [f"{fixture.dir.name}__p000000", f"{fixture.dir.name}__p000001"]
     for p in range(fixture.n_positions):
         reader.set_scene(p)
@@ -395,11 +395,20 @@ def test_empty_data_dir_raises(tmp_path: Path) -> None:
         SnoutyReader(fixture.dir)
 
 
-def test_default_mode_is_raw(synthetic_snouty) -> None:
-    default = SnoutyReader(synthetic_snouty.dir)
-    explicit = SnoutyReader(synthetic_snouty.dir, mode="raw")
-    assert default.xarray_dask_data.shape == explicit.xarray_dask_data.shape
-    assert default.physical_pixel_sizes == explicit.physical_pixel_sizes
+def test_default_mode_is_desheared(synthetic_snouty) -> None:
+    """No ``mode`` kwarg gives the axis-aligned volume, not the skewed one.
+
+    The expected Y comes from the fixture geometry and the shift formula, not
+    from a second reader, so this fails if the default silently stays ``raw``
+    and also if ``desheared`` stops padding Y.
+    """
+    reader = SnoutyReader(synthetic_snouty.dir)
+
+    max_shift = _deshear.max_deshear_shift(
+        synthetic_snouty.scan_step_size_px, synthetic_snouty.size_z
+    )
+    assert max_shift > 0, "the fixture must shear, or this test cannot tell the modes apart"
+    assert reader.xarray_dask_data.shape[3] == synthetic_snouty.size_y + max_shift
 
 
 def test_unknown_mode_raises(synthetic_snouty) -> None:
@@ -493,7 +502,7 @@ def test_multi_timepoint_shape_and_dtype(tmp_path: Path) -> None:
         subdir_name="2026-07-14_10-24-15_000_ht_sols_acquire",
         n_timepoints=3,
     )
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     xr_da = reader.xarray_dask_data
     assert xr_da.dims == ("T", "C", "Z", "Y", "X")
     assert xr_da.shape == (3, 1, fixture.size_z, fixture.size_y, fixture.size_x)
@@ -514,7 +523,7 @@ def test_multi_timepoint_one_dask_chunk_per_timepoint(tmp_path: Path) -> None:
 
 def test_multi_timepoint_preserves_per_plane_content_and_order(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path, n_timepoints=3)
-    reader = SnoutyReader(fixture.dir)
+    reader = SnoutyReader(fixture.dir, mode="raw")
     computed = reader.xarray_dask_data.data.compute()
 
     for t in range(fixture.n_timepoints):

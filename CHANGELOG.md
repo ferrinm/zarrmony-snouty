@@ -7,6 +7,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### BREAKING
+
+- **The default `mode` is now `desheared`, not `raw`** (#11). The same
+  command writes a different array: Y grows from `Y` to `Y + max_shift`, and
+  each z-plane sits at its aligned Y offset. Z spacing does not change.
+  - **To keep the v0.2 output, name the mode.** Pass `mode="raw"` to
+    `SnoutyReader` or `SnoutySessionReader`, or set
+    `ZARRMONY_SNOUTY_MODE=raw` for the plugin `open` shims and the
+    `zarrmony convert` CLI.
+  - `raw` is a permanent backward-compatible mode. It is not deprecated.
+  - Three reasons for the flip. Deshear is lossless, because it writes every
+    input voxel exactly once at an integer offset, so `raw` is recoverable
+    from a desheared store given the sidecar. It costs 0.15 s per timepoint
+    on the CPU. The padding is zeros, and zeros compress to nothing: at
+    zstd level 3, signal costs 0.941 bytes per voxel and zero padding costs
+    0.000061. An end-to-end convert of a real 48-plane snap confirms it. The
+    default array holds 2.71x the voxels of the raw array and occupies
+    15,048,616 bytes against 15,061,674, a ratio of 1.00x.
+  - **A store can still grow, for an unrelated reason.** A taller array can
+    cross zarrmony's threshold for an extra pyramid level. In that convert,
+    the raw store stopped at level 0 and the desheared store added a level 1
+    of 3.5 MB, which made the whole store 1.23x. Downsampling blends padding
+    with signal, so the extra level does not compress like the padding does.
+  - `traditional` is not the default, because it resamples with
+    nearest-neighbour and does not invert.
+  - One `DEFAULT_MODE` constant in `zarrmony_snouty.adapter` now backs both
+    readers and both plugin shims, so the four defaults cannot drift apart.
+
 ### Added
 
 - **`engine` selector on both readers** (#10). `SnoutyReader` and

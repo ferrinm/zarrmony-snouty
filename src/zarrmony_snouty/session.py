@@ -51,6 +51,7 @@ from ._metadata import SnoutyMetadataError, parse_metadata_dir
 from .adapter import (
     _MODES,
     _XY_POSITION_LIST_FILENAME,
+    DEFAULT_MODE,
     DTYPE,
     Mode,
     SnoutyDataError,
@@ -138,7 +139,7 @@ class SnoutySessionReader:
     layout_hint = "flat"
     plate_layout = None
 
-    def __init__(self, path: Path, mode: Mode = "raw", *, engine: Engine = "auto") -> None:
+    def __init__(self, path: Path, mode: Mode = DEFAULT_MODE, *, engine: Engine = "auto") -> None:
         if mode not in _MODES:
             raise SnoutyModeError(
                 f"unknown SnoutyReader mode {mode!r}; expected one of {list(_MODES)}"

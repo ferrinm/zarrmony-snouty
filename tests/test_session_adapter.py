@@ -166,7 +166,9 @@ def test_set_scene_forwards_to_correct_child_and_per_scene(tmp_path: Path) -> No
         subdir_name="2026-07-14_10-54-45_000_ht_sols_acquire",
         n_positions=2,
     )
-    reader = SnoutySessionReader(session)
+    # Raw, because the assertions below compare whole planes against the
+    # fixture's per-plane values. Deshear pads those planes with zeros.
+    reader = SnoutySessionReader(session, mode="raw")
     # scene 0 -> a[0]; scene 1 -> b[0]; scene 2 -> b[1]
     reader.set_scene(0)
     da0 = reader.xarray_dask_data.data.compute()
@@ -272,6 +274,26 @@ def test_mode_propagates_to_every_child(tmp_path: Path) -> None:
     assert reader.xarray_dask_data.shape == (1, 1, b.size_z, b.size_y + max_shift, b.size_x)
 
 
+def test_default_mode_is_desheared_for_every_child(tmp_path: Path) -> None:
+    """No ``mode`` kwarg deshears every scene, not just the first.
+
+    The session reader holds its own default, so it can drift from
+    ``SnoutyReader``'s. Both children are checked, because a default applied
+    once at construction and a default pushed per child fail differently.
+    """
+    session = _make_session(tmp_path)
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
+    b = write_synthetic_snouty(session, subdir_name="2026-07-14_10-16-14_000_ht_sols_acquire")
+    reader = SnoutySessionReader(session)
+    from zarrmony_snouty import _deshear
+
+    for index, child in ((0, a), (1, b)):
+        reader.set_scene(index)
+        max_shift = _deshear.max_deshear_shift(child.scan_step_size_px, child.size_z)
+        assert max_shift > 0, "the fixture must shear, or this test cannot tell the modes apart"
+        assert reader.xarray_dask_data.shape[3] == child.size_y + max_shift
+
+
 def test_unknown_mode_raises_snouty_mode_error(tmp_path: Path) -> None:
     session = _make_session(tmp_path)
     write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
@@ -297,8 +319,24 @@ def test_open_session_reads_mode_env_var(tmp_path: Path, monkeypatch) -> None:
     )
 
 
-def test_open_session_defaults_to_raw_when_env_unset(tmp_path: Path, monkeypatch) -> None:
+def test_open_session_defaults_to_desheared_when_env_unset(tmp_path: Path, monkeypatch) -> None:
+    """``zarrmony convert`` on a session directory, with nothing configured."""
     monkeypatch.delenv("ZARRMONY_SNOUTY_MODE", raising=False)
+    session = _make_session(tmp_path)
+    a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
+    reader = _open_session(session)
+    reader.set_scene(0)
+
+    from zarrmony_snouty import _deshear
+
+    max_shift = _deshear.max_deshear_shift(a.scan_step_size_px, a.size_z)
+    assert max_shift > 0, "the fixture must shear, or this test cannot tell the modes apart"
+    assert reader.xarray_dask_data.shape == (1, 1, a.size_z, a.size_y + max_shift, a.size_x)
+
+
+def test_open_session_raw_from_env_restores_the_pre_v03_shape(tmp_path: Path, monkeypatch) -> None:
+    """The documented escape hatch, at the session seam."""
+    monkeypatch.setenv("ZARRMONY_SNOUTY_MODE", "raw")
     session = _make_session(tmp_path)
     a = write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
     reader = _open_session(session)

@@ -28,8 +28,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Lock files (use uv.lock if/when uv is adopted)
-# uv.lock
+# Lock files: uv is adopted, and uv.lock is committed on purpose.
 
 # Local Claude session state
 .claude/sessions/

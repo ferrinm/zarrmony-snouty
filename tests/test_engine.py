@@ -3,15 +3,19 @@
 *Mode* is the output geometry. *Engine* is where it computes. Only
 ``traditional`` has a GPU path (ADR-0002, decision 2).
 
-These tests run on any host. The three facts that need hardware — whether
-cupy imported, how many bytes the device has free, and the device transform
-itself — are each one substitutable leaf in
+Most of these tests run on any host. The three facts that need hardware —
+whether cupy imported, how many bytes the device has free, and the device
+transform itself — are each one substitutable leaf in
 :mod:`zarrmony_snouty._deshear_gpu`, and :func:`fake_device` replaces them.
 The resolution logic under test is the same code a GPU host runs.
+
+The two smoke tests at the end are the exception. They need a real card and
+a real acquisition, and they skip everywhere else.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import numpy as np
@@ -20,7 +24,7 @@ import pytest
 from tests.conftest import write_synthetic_snouty
 from zarrmony_snouty import _deshear, _deshear_gpu, _open, _open_session
 from zarrmony_snouty._errors import SnoutyEngineError
-from zarrmony_snouty._metadata import SnoutyMetadataError
+from zarrmony_snouty._metadata import SnoutyMetadataError, parse_metadata_dir
 from zarrmony_snouty.adapter import SnoutyReader
 from zarrmony_snouty.session import SnoutySessionReader
 
@@ -439,3 +443,78 @@ def test_the_default_engine_writes_the_v0_2_pixels_on_a_cpu_only_host(
         default.xarray_dask_data.compute().to_numpy(),
         explicit.xarray_dask_data.compute().to_numpy(),
     )
+
+
+# Real hardware, real acquisition. Everything above substitutes the device,
+# which proves the decision table but not that a card ever ran a convert.
+# These two close that gap. They reuse the env vars the adapter and session
+# smokes already define, because real acquisition paths carry operator names
+# and cannot live in the tree.
+
+REAL_ACQUISITION_ENV_VAR = "ZARRMONY_SNOUTY_REAL_MULTI_T_DIR"
+REAL_SESSION_ENV_VAR = "ZARRMONY_SNOUTY_REAL_SESSION_DIR"
+
+
+def _real_dir(env_var: str) -> Path:
+    env_path = os.environ.get(env_var)
+    if not env_path:
+        pytest.skip(f"{env_var} not set; skipping real-data smoke")
+    path = Path(env_path)
+    if not path.is_dir():
+        pytest.skip(f"{env_var}={env_path} is not a directory; skipping")
+    return path
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not _deshear_gpu.cupy_available, reason="cupy is not installed")
+def test_real_acquisition_runs_traditional_on_the_device() -> None:
+    """One real timepoint through the GPU, end to end.
+
+    Run this on the GPU host to close the last acceptance criterion of #10.
+    It asserts the shape the CPU formula predicts, so it catches a device
+    path that returns the wrong geometry. It cannot assert the pixels: the
+    two engines disagree by design, and ``test_deshear_gpu.py`` bounds that
+    disagreement against a CPU reference already.
+    """
+    real_dir = _real_dir(REAL_ACQUISITION_ENV_VAR)
+
+    reader = SnoutyReader(real_dir, mode="traditional", engine="gpu")
+
+    assert reader.engine_used == "gpu"
+    assert reader.engine_fallback_reason is None
+    audit = reader.acquisition_audit["zarrmony_snouty"]
+    assert audit["cupy_version"] is not None
+    assert audit["cuda_runtime_version"] is not None
+
+    # Shape comes from the sidecar through the CPU formula, not from the
+    # device output, so a device path with the wrong geometry fails here.
+    meta = parse_metadata_dir(real_dir / "metadata")
+    expected = _deshear.traditional_shape(
+        meta.size_z,
+        meta.size_y,
+        meta.size_x,
+        meta.scan_step_size_px,
+        meta.voxel_aspect_ratio,
+    )
+
+    first = reader.xarray_dask_data.isel(T=0, C=0).data.compute()
+    assert first.dtype == np.uint16
+    assert first.any(), "the device returned an all-zero volume"
+    assert first.shape == expected
+
+
+@pytest.mark.gpu
+@pytest.mark.skipif(not _deshear_gpu.cupy_available, reason="cupy is not installed")
+def test_real_session_resolves_one_engine_for_every_scene() -> None:
+    """The all-or-nothing rule against a real card and real geometries.
+
+    The synthetic version stubs the free-byte figure. This one asks the
+    driver. Whichever engine the card allows, every scene must report the
+    same one, and the same reason.
+    """
+    session_dir = _real_dir(REAL_SESSION_ENV_VAR)
+
+    reader = SnoutySessionReader(session_dir, mode="traditional", engine="auto")
+
+    decisions = set(_engine_per_scene(reader))
+    assert len(decisions) == 1, f"the session mixed engines: {decisions}"

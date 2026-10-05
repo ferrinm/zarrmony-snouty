@@ -25,8 +25,20 @@ A single snap or continuous scan run, on disk as a subdirectory whose name ends 
 _Avoid_: subdir, run, capture, folder.
 
 **Position**:
-An XY stage location within an acquisition. On disk, positions are the `MMMMMM` in `NNNNNN_pMMMMMM.tif` filenames. Multi-position acquisitions expose one scene per position (see #3).
-_Avoid_: field, site, well (well is reserved for HCS-plate #6), point.
+An XY stage location in a **flat** acquisition, addressed by ordinal. On disk, positions are the `MMMMMM` in `NNNNNN_pMMMMMM.tif` filenames. Multi-position acquisitions expose one scene per position (see #3). On a *Plate*, the same physical idea is a *Field* inside a *Well*, addressed by coordinate instead of by ordinal.
+_Avoid_: site, point, well, field (a plate addresses its stage locations as *Well* plus *Field*; a position is the flat-shape term only).
+
+**Plate**:
+A multiwell carrier, and the input shape it produces: one acquisition directory whose `data/` filenames carry well coordinates. Produced by an operator-edited python script, not by the GUI, so the directory name is free text and carries no reliable plate marker. The reader identifies a plate from its filenames (see #6).
+_Avoid_: multiwell, plate map, screen, HCS (HCS names the OME-NGFF output layout, not the input).
+
+**Well**:
+One addressable chamber on a *Plate*, named by a row label and a column label. Two filename grammars encode it. `000000_A01r00c00.tif` names the well `A01` — a row letter and a 1-based column. `000000_r00c00.tif` names the well by a 0-based row index and a 0-based column index, and holds exactly one *Field*.
+_Avoid_: site, position, spot.
+
+**Field**:
+One imaged XY location inside a *Well*. The first grammar above records a field as the `r<NN>c<NN>` suffix after the well label. The second grammar records one field per well and gives it no label. Each field becomes a separate OME-NGFF image, never an extra array axis.
+_Avoid_: tile (the vendor says "tile", which promises a stitched mosaic; this reader does not stitch), FOV, site, subposition.
 
 **Timepoint**:
 A single volumetric snapshot at one position. On disk, timepoints are the `NNNNNN` in `NNNNNN.tif` or `NNNNNN_pMMMMMM.tif`. Concatenated into the T axis by #2.

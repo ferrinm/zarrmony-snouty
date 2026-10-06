@@ -37,6 +37,67 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **HCS-plate output for multiwell-plate acquisitions** (#6). A third
+  reader, `SnoutyPlateReader`, converts a script-driven plate run into one
+  OME-NGFF HCS plate store: `<plate>/<row>/<column>/<field>`. One scene per
+  imaged field, and every field stays `(T, C, Z, Y, X)`. See
+  [ADR-0003](docs/adr/0003-snouty-plate-detection-and-grid-inference.md).
+  - **The matcher tests the contents and never the directory name.** That
+    name is a literal in a script the operator edits. Six of the ten plate
+    acquisitions surveyed end in `ht_sols_acquisition_multiwell_plate` plus
+    free text, two carry no plate token at all, and none uses the name the
+    vendor template builds. `match_plate` returns 200, above the 100 the
+    other two matchers return, so a plate still converts as a plate when an
+    operator gives it a GUI suffix.
+  - **Two filename grammars, and both patterns are anchored.** Grammar A is
+    the vendor generator, `000000_A01r00c00.tif`, where `r00c00` is the
+    field inside well `A01`. Grammar B is a hand-rolled operator loop,
+    `000000_r00c00.tif`, where `r00c00` is the **well** and the well holds
+    one field. The two tokens are byte-identical, so an unanchored search
+    reads a 384-well grammar-B plate as 384 fields of one well.
+  - **The grid is inferred.** Nothing on disk records the size of the
+    physical plate, and both grammars record absolute well coordinates, so
+    the observed extent is a lower bound. The reader snaps that extent up to
+    the smallest standard format that contains it (6, 12, 24, 48, 96, 384,
+    or 1536 wells). Unimaged wells get no well group, and their row and
+    column names stay in the plate attributes.
+  - **Snapping can under-report a plate.** A 384-well plate imaged only in
+    `A1` to `H12` snaps to 96. `plate_format=<well count>` overrides the
+    lookup, and it is why that keyword exists. A value outside the table,
+    or one too small for the wells on disk, raises the new
+    `SnoutyPlateFormatError`. An extent that no standard format contains
+    emits the new `SnoutyPlateFormatWarning` and falls back to the observed
+    bounding box.
+  - **The embedded acquisition script is never read.** Every plate
+    directory holds a copy, and it declares `total_rows` and `total_cols`
+    directly. One acquisition on the share proves the script and the data
+    disagree about which wells were imaged. The filenames record the truth.
+  - **Strict parsing.** A `data/` that mixes the two grammars raises
+    `SnoutyDataError`, and so does a single `.tif` that matches neither.
+    There is no skip-with-warning and no fallback to the flat reader.
+  - Scenes are named `<acquisition-dir>__<canonical-well><field-token>` and
+    sorted by well, then by field inside the well. Both grammars snake
+    across the plate, and the snake carries no meaning.
+  - New `snouty-plate` entry point, so `zarrmony convert <plate-dir> <out>`
+    needs no flag. `mode` and `engine` behave exactly as they do on the
+    other two readers, through the same two environment variables.
+  - `SnoutySessionReader` learns nothing about plates. A plate is never a
+    child of a GUI session.
+  - **Opening a 384-well plate costs one directory listing and one sidecar
+    read.** Two reads that a flat acquisition can afford do not scale to
+    3456 files on a network share, and both were measured at about 70 ms per
+    file there:
+    - The reader reads the sidecar of the first data file by name.
+      `parse_metadata_dir` picks the oldest `.txt`, which costs one `stat()`
+      per sidecar: 246 s on the real 384-well acquisition. A plate whose
+      first sidecar is missing still falls back to the directory scan.
+    - The reader reads no burned-in stamp when every field holds one
+      timepoint, because with one file per field any order is the same
+      order. A multi-timepoint plate still orders its T axis by the stamp.
+    - Measured on the real 384-well acquisition: 246 s to build the layout
+      before, 0.2 s after.
+  - **Every plate acquisition found on the share has one timepoint.** The
+    multi-timepoint plate path is covered synthetically only.
 - **`engine` selector on both readers** (#10). `SnoutyReader` and
   `SnoutySessionReader` take `engine="auto" | "cpu" | "gpu"`, which wires the
   `_deshear_gpu` module from #8 into the reader for the first time. *Mode* is
@@ -230,6 +291,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The dependency floor is now `zarrmony>=0.9.0`** (#6). The old `>=0.3.0`
+  pin predates the plate API (`PlateLayout`, `PlateField`, `Acquisition`).
+- **The per-scene pixel path moved to a new internal `_pixels` module**
+  (#6). The read, the timestamp-strip crop, the time ordering, the
+  transform, and the pixel sizes now live on one `ScenePixels` helper that
+  `SnoutyReader` and `SnoutyPlateReader` both call. The two readers differ
+  only in how they group files into scenes. No behavior changed, and
+  `zarrmony_snouty.adapter` re-exports every name it exported before.
 - `_read_and_crop_plane` now always returns `(C, Z, Y, X)`: bare
   `(Z, Y, X)` and `(Z, 1, Y, X)` single-channel volumes get a C axis
   prepended; `(Z, C, Y, X)` multi-channel volumes get their leading Z↔C

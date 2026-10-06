@@ -2,13 +2,14 @@
 
 Snouty (single-objective light-sheet, "SOLS") reader plugin for
 [zarrmony](https://github.com/ferrinm/zarrmony). Detects a single Snouty GUI
-acquisition subdirectory (`*_ht_sols_snap` or `*_ht_sols_acquire`) or a
-top-level GUI-session directory (`*_ht_sols_gui`) and converts the raw skewed
-volumes it contains to OME-NGFF 0.5:
+acquisition subdirectory (`*_ht_sols_snap` or `*_ht_sols_acquire`), a
+top-level GUI-session directory (`*_ht_sols_gui`), or a multiwell-plate
+acquisition, and converts the raw skewed volumes it contains to OME-NGFF 0.5:
 
 ```bash
 zarrmony convert /path/to/<ts>_000_ht_sols_snap ./out
 zarrmony convert /path/to/<ts>_ht_sols_gui ./out   # one output store per subdir
+zarrmony convert /path/to/<plate-run-dir> ./out    # one HCS plate store
 ```
 
 ## Install
@@ -27,15 +28,17 @@ This pulls `zarrmony` from PyPI as a transitive dependency.
 
 ## Verify the plugin registered
 
-The distribution ships **two** `ReaderPlugin` values under `zarrmony.readers`:
-`zarrmony-snouty` (subdir-level, v0.1) and `zarrmony-snouty-session`
-(session-level, v0.3). Both should appear after `pip install`:
+The distribution ships **three** `ReaderPlugin` values under
+`zarrmony.readers`: `zarrmony-snouty` (subdir-level, v0.1),
+`zarrmony-snouty-session` (session-level, v0.3) and
+`zarrmony-snouty-plate` (multiwell plate). All three appear after
+`pip install`:
 
 ```python
 from zarrmony.readers.plugin import list_plugins
 
 print([p.name for p in list_plugins()])
-# -> [..., 'zarrmony-snouty', 'zarrmony-snouty-session']
+# -> [..., 'zarrmony-snouty', 'zarrmony-snouty-session', 'zarrmony-snouty-plate']
 ```
 
 For a clean-venv install smoke test (the same shape CI runs):
@@ -93,6 +96,78 @@ per affected subdir and omit the attrs for that subdir.
 The Z spacing is the **scan step** — the physical distance the scan mirror
 moves between successive slices — in both `raw` and `desheared`. Only
 `traditional` reports an orthogonal Z. See the modes below.
+
+### Multiwell plate
+
+Point `zarrmony convert` at a plate acquisition to write one OME-NGFF HCS
+plate store:
+
+```bash
+zarrmony convert /path/to/<plate-run-dir> ./out/plate.ome.zarr
+```
+
+Well groups sit at `<row>/<column>/`, and each well group holds one image per
+imaged field. Every field image is `(T, C, Z, Y, X)`, the same shape the flat
+reader writes. `mode` and `engine` work exactly as they do above, through the
+same two environment variables.
+
+A plate acquisition comes from a python script that an operator edits, not
+from the vendor GUI, so the directory name is free text. **The matcher
+therefore reads the contents and never the name.** It fires when `data/` and
+`metadata/` both exist and every `.tif` under `data/` follows one of two
+filename grammars:
+
+| grammar | example | `r00c00` names |
+| --- | --- | --- |
+| A, the vendor generator | `000000_A01r00c00.tif` | the **field** inside well `A01` |
+| B, a hand-rolled loop | `000000_r00c00.tif` | the **well**, which holds one field |
+
+The two tokens are identical and mean different things, so a directory that
+mixes them raises `SnoutyDataError`. A `.tif` that matches neither raises as
+well. There is no skip-with-warning.
+
+#### The plate grid is inferred
+
+Nothing on disk records the size of the physical plate. Both grammars record
+absolute well coordinates, so the observed well extent is a lower bound and
+never the plate itself. The reader snaps that extent up to the smallest
+standard format that contains it:
+
+| wells | rows x columns |
+| ----- | -------------- |
+| 6 | 2 x 3 |
+| 12 | 3 x 4 |
+| 24 | 4 x 6 |
+| 48 | 6 x 8 |
+| 96 | 8 x 12 |
+| 384 | 16 x 24 |
+| 1536 | 32 x 48 |
+
+Unimaged wells get no group on disk. Their row and column names stay in the
+plate attributes, because the OME-NGFF plate lists every physical row and
+column.
+
+**Snapping can under-report a plate.** A 384-well plate imaged only in `A1`
+to `H12` has an extent of 8 by 12, which snaps to 96. Name the real plate to
+correct it:
+
+```python
+from zarrmony_snouty import SnoutyPlateReader
+
+reader = SnoutyPlateReader("/path/to/<plate-run-dir>", plate_format=384)
+```
+
+A well count outside the table, or one too small for the wells on disk,
+raises `SnoutyPlateFormatError`. An extent that no standard format contains
+emits a `SnoutyPlateFormatWarning` and falls back to the observed bounding
+box.
+
+The reader **never reads the acquisition script** that every plate directory
+contains, even though that script declares the plate size directly. One
+acquisition on the share proves that the script and the data disagree about
+which wells were imaged. See
+[ADR-0003](docs/adr/0003-snouty-plate-detection-and-grid-inference.md) for
+the evidence behind both decisions.
 
 ### Output modes
 
@@ -354,12 +429,18 @@ before any pixel work starts.
 - **Whole GUI-session directories** — one `zarrmony convert` on
   `*_ht_sols_gui/` produces one output store per non-empty subdir. Empty or
   malformed subdirs are skipped with a warning.
+- **Multiwell-plate acquisitions** — one `zarrmony convert` produces one
+  OME-NGFF HCS plate store with well groups at `<row>/<column>/` and one
+  image per imaged field. Both filename grammars are read, and the plate
+  grid is inferred. See **Multiwell plate** above.
 
-Detection requires either a subdir whose name ends in `_ht_sols_snap` or
-`_ht_sols_acquire` with sibling `data/` and `metadata/` dirs (at least one
-`.tif` and one `.txt`), or a parent GUI-session dir whose name ends in
-`_ht_sols_gui` and which contains at least one such subdir. See Limitations
-for the remaining unsupported shape.
+Detection requires one of three shapes: a subdir whose name ends in
+`_ht_sols_snap` or `_ht_sols_acquire` with sibling `data/` and `metadata/`
+dirs (at least one `.tif` and one `.txt`); a parent GUI-session dir whose
+name ends in `_ht_sols_gui` and which contains at least one such subdir; or
+a directory with sibling `data/` and `metadata/` dirs whose `.tif` files all
+carry well coordinates. The plate matcher tests no part of the directory
+name. See Limitations for the remaining unsupported shape.
 
 ## Limitations
 
@@ -377,16 +458,21 @@ for the remaining unsupported shape.
 - **cupy is a soft dependency, and there is no `gpu` extra.** `pip install
   zarrmony-snouty` installs no CUDA. Install a matching cupy wheel yourself
   to get a GPU path. See **Engine** above.
-- **No HCS-plate output.** Sessions whose `XY_stage_position_list.txt`
-  describes a well-plate scan-order still surface as a flat scene list.
-  Plate-shape detection and OME-NGFF HCS output are tracked for a later
-  release.
-  - Plate tile scans also use a third directory suffix and a third filename
-    shape: `*_ht_sols_acquisition_*` directories holding
-    `NNNNNN_<well>r<row>c<col>.tif`. Detection accepts neither suffix, so the
-    reader rejects these directories instead of reading them as a flat T
-    axis. The stage visits the tiles in a serpentine order, so their
-    burned-in frame counters ascend in tile order and not in filename order.
+- **The plate grid is a guess, not a measurement.** Nothing on disk records
+  it. A reader of the output cannot tell an inferred grid from a measured
+  one. Pass `plate_format` whenever you know the real plate. See **Multiwell
+  plate** above.
+- **A plate carries one acquisition.** The OME-NGFF plate writer accepts at
+  most one, so a plate imaged in two passes is out of scope.
+- **Fields are never stitched.** Each field of a well becomes a separate
+  image inside the well group. The vendor calls a field a "tile", which
+  promises a mosaic; this reader builds none.
+- **Plate stage coordinates are not mapped.** The vendor computes an
+  absolute XY position per field. The output carries the well and the field,
+  not those coordinates.
+- **The multi-timepoint plate path has no real fixture.** Every plate
+  acquisition found on the share has exactly one timepoint. That path is
+  covered synthetically only.
 
 ## Roadmap
 
@@ -396,7 +482,9 @@ for the remaining unsupported shape.
 - **v0.3** — ✅ top-level `*_ht_sols_gui/` directory as multi-scene input,
   one output store per non-empty subdir; ✅ in-process GPU `traditional`
   transform behind an `engine` selector, with a CPU fallback; ✅ **BREAKING**
-  the default mode is now `desheared` and not `raw`.
+  the default mode is now `desheared` and not `raw`; ✅ OME-NGFF HCS plate
+  output for multiwell-plate acquisitions, detected by filename and never by
+  directory name.
 
 ## Why a separate package?
 

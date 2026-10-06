@@ -11,20 +11,25 @@ fresh venv), the entry-point declaration in ``pyproject.toml`` is wired up.
 
 from __future__ import annotations
 
+import pytest
 from zarrmony.readers.plugin import list_plugins
 
+PLUGIN_NAMES = ["zarrmony-snouty", "zarrmony-snouty-session", "zarrmony-snouty-plate"]
 
-def test_plugin_registered_via_entry_point() -> None:
+
+@pytest.mark.parametrize("name", PLUGIN_NAMES)
+def test_plugin_registered_via_entry_point(name: str) -> None:
     plugins = {p.name: p for p in list_plugins()}
-    assert "zarrmony-snouty" in plugins, (
-        "zarrmony-snouty did not appear in list_plugins(); check that "
+    assert name in plugins, (
+        f"{name} did not appear in list_plugins(); check that "
         '[project.entry-points."zarrmony.readers"] in pyproject.toml is intact '
         "and that the package was installed (pip install -e .)."
     )
 
 
-def test_registered_plugin_carries_expected_provenance() -> None:
+@pytest.mark.parametrize("name", PLUGIN_NAMES)
+def test_registered_plugin_carries_expected_provenance(name: str) -> None:
     plugins = {p.name: p for p in list_plugins()}
-    p = plugins["zarrmony-snouty"]
+    p = plugins[name]
     assert p.distribution == "zarrmony-snouty"
     assert p.source == "entry_point"

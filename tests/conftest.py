@@ -14,6 +14,10 @@ The reader orders the T axis by that stamp, so a fixture without one would
 exercise only the fallback path. ``stamp_rank`` lets a test hand the camera a
 different acquisition order from the filename order, and ``burn_timestamps``
 turns the stamp off to reach the fallback deliberately.
+
+A plate acquisition is written by passing ``plate=PlateSpec(...)``. The
+grammar, the imaged wells, and the fields per well all come from that spec,
+and the sidecar and stamp writers are shared with the flat shapes.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pytest
@@ -29,6 +34,47 @@ import tifffile
 
 from zarrmony_snouty._metadata import TIMESTAMP_STRIP_PX
 from zarrmony_snouty._pco_timestamp import PCO_STAMP_PX
+
+#: Default name for a flat acquisition directory — the vendor GUI writes it.
+DEFAULT_SUBDIR_NAME = "2026-07-14_10-15-35_000_ht_sols_snap"
+
+#: Default name for a plate acquisition directory. An operator writes this
+#: one by hand, so it carries no GUI suffix and no plate token. The plate
+#: matcher must fire on the contents alone (ADR-0003).
+DEFAULT_PLATE_SUBDIR_NAME = "2026-07-14_10-15-35_000_scripted_run"
+
+
+@dataclass(frozen=True)
+class PlateSpec:
+    """The plate shape to write under ``data/``.
+
+    ``wells`` and ``fields`` hold 0-based ``(row, column)`` pairs in the order
+    the fixture writes them, so a test can hand them over out of order and
+    then assert that the reader sorts them.
+
+    Grammar A names a well with a row letter and a 1-based column, then names
+    the field after it: ``000000_A01r00c00.tif``. Grammar B names the well
+    with two 0-based indices and holds one field per well:
+    ``000000_r00c00.tif``.
+    """
+
+    grammar: Literal["A", "B"] = "A"
+    wells: tuple[tuple[int, int], ...] = ((0, 0),)
+    fields: tuple[tuple[int, int], ...] = ((0, 0),)
+
+    def __post_init__(self) -> None:
+        if self.grammar == "B" and self.fields != ((0, 0),):
+            raise ValueError("grammar B holds exactly one field per well")
+
+    def tokens(self) -> tuple[str, ...]:
+        """The filename tails, one per field, in write order."""
+        if self.grammar == "A":
+            return tuple(
+                f"{chr(ord('A') + row)}{column + 1:02d}r{field_row:02d}c{field_column:02d}"
+                for row, column in self.wells
+                for field_row, field_column in self.fields
+            )
+        return tuple(f"r{row:02d}c{column:02d}" for row, column in self.wells)
 
 
 @dataclass(frozen=True)
@@ -45,6 +91,7 @@ class SnoutyFixture:
     scan_step_size_px: float
     n_timepoints: int = 1
     n_positions: int = 1
+    plate: PlateSpec | None = None
 
     def value_for(self, z: int, t: int = 0, p: int = 0, c: int = 0) -> int:
         # Distinct per-plane fill so adapter tests can check the crop boundary,
@@ -54,6 +101,18 @@ class SnoutyFixture:
         # tests stay byte-for-byte identical. 30000 * c keeps the fixture
         # within uint16 for c ∈ {0, 1} at realistic z/t/p sizes.
         return 30000 * c + 10000 * p + 1000 * (t + 1) + z + 1
+
+    def plate_value_for(self, field_index: int, z: int, t: int = 0, c: int = 0) -> int:
+        # ``value_for`` strides 10000 per position and overflows uint16 past
+        # six of them. A plate fixture routinely has 16 fields, so it gets its
+        # own stride: distinct per (field, t, c, z) and inside uint16 for 64
+        # fields, 4 timepoints, and 4 channels.
+        return 500 * (field_index + 1) + 100 * t + 10 * c + z + 1
+
+    def field_token(self, field_index: int) -> str:
+        """The filename tail of one field, in the fixture's write order."""
+        assert self.plate is not None, "field_token is for plate fixtures only"
+        return self.plate.tokens()[field_index]
 
 
 def encode_pco_stamp(counter: int, when: dt.datetime) -> np.ndarray:
@@ -122,7 +181,7 @@ def _sidecar_text(fixture: SnoutyFixture, filename: str, when: dt.datetime) -> s
 def write_synthetic_snouty(
     root: Path,
     *,
-    subdir_name: str = "2026-07-14_10-15-35_000_ht_sols_snap",
+    subdir_name: str | None = None,
     size_z: int = 4,
     size_y_cropped: int = 6,
     # Wide enough to hold the PCO_STAMP_PX-pixel burned-in stamp in row 0.
@@ -134,6 +193,7 @@ def write_synthetic_snouty(
     scan_step_size_px: float = 7.0,
     n_timepoints: int = 1,
     n_positions: int = 1,
+    plate: PlateSpec | None = None,
     burn_timestamps: bool = True,
     stamp_rank: Callable[[int, int], int] | None = None,
 ) -> SnoutyFixture:
@@ -147,16 +207,28 @@ def write_synthetic_snouty(
     independently. Returns a ``SnoutyFixture`` with everything a test needs
     to assert against.
 
+    With ``plate=PlateSpec(...)`` filenames instead carry well coordinates,
+    one file per field per timepoint, and the directory gets the operator's
+    free-text name. Each field gets a distinct per-plane fill through
+    ``SnoutyFixture.plate_value_for``. ``plate`` and ``n_positions`` are
+    mutually exclusive: a plate addresses its stage locations by well and
+    field, never by position ordinal.
+
     ``stamp_rank(t, p)`` returns the acquisition rank of one volume, which
     fixes both its burned-in stamp and its sidecar ``Date`` and ``Time``. The
     default is the real camera's order: every position of one timepoint, then
     the next timepoint. Pass your own to make the camera clock disagree with
-    the filenames.
+    the filenames. On a plate, ``p`` is the index of the field in the spec's
+    write order.
 
     Set ``burn_timestamps`` to ``False`` to leave row 0 filled with the
     sentinel, which is what a camera with its timestamp feature off writes.
     The reader then falls back to filename order.
     """
+    if plate is not None and n_positions != 1:
+        raise ValueError("pass either plate= or n_positions=, not both")
+    if subdir_name is None:
+        subdir_name = DEFAULT_PLATE_SUBDIR_NAME if plate is not None else DEFAULT_SUBDIR_NAME
     subdir = root / subdir_name
     (subdir / "data").mkdir(parents=True)
     (subdir / "metadata").mkdir()
@@ -176,20 +248,33 @@ def write_synthetic_snouty(
         scan_step_size_px=scan_step_size_px,
         n_timepoints=n_timepoints,
         n_positions=n_positions,
+        plate=plate,
     )
+
+    # One unit per file-per-timepoint: a position on a flat acquisition, a
+    # field on a plate.
+    tokens = plate.tokens() if plate is not None else None
+    n_units = len(tokens) if tokens is not None else n_positions
+
+    def fill_value(z: int, t: int, unit: int, c: int) -> int:
+        if plate is not None:
+            return fixture.plate_value_for(unit, z, t, c)
+        return fixture.value_for(z, t, unit, c)
 
     n_channels = len(channels)
     frames_per_volume = size_z * n_channels
     if stamp_rank is None:
 
         def stamp_rank(t: int, p: int) -> int:
-            return t * n_positions + p
+            return t * n_units + p
 
     for t in range(n_timepoints):
-        for p in range(n_positions):
+        for p in range(n_units):
             # Single-position, single-timepoint fixtures keep the historical
             # ``snap.tif`` name so legacy tests that grep the filename still work.
-            if n_positions > 1:
+            if tokens is not None:
+                stem = f"{t:06d}_{tokens[p]}"
+            elif n_positions > 1:
                 stem = f"{t:06d}_p{p:06d}"
             elif n_timepoints == 1:
                 stem = "snap"
@@ -208,14 +293,14 @@ def write_synthetic_snouty(
                 for z in range(size_z):
                     for c in range(n_channels):
                         volume[z, c, :TIMESTAMP_STRIP_PX, :] = 9999
-                        volume[z, c, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t, p, c)
+                        volume[z, c, TIMESTAMP_STRIP_PX:, :] = fill_value(z, t, p, c)
             else:
                 volume = np.zeros((size_z, height_px, size_x), dtype=np.uint16)
                 for z in range(size_z):
                     # Timestamp strip at the top rows — filled with a sentinel so tests
                     # can confirm it gets cropped and never surfaces to callers.
                     volume[z, :TIMESTAMP_STRIP_PX, :] = 9999
-                    volume[z, TIMESTAMP_STRIP_PX:, :] = fixture.value_for(z, t, p)
+                    volume[z, TIMESTAMP_STRIP_PX:, :] = fill_value(z, t, p, 0)
 
             if burn_timestamps and size_x >= PCO_STAMP_PX:
                 # Row 0 of every 2D frame, in on-disk page order: Z outermost,

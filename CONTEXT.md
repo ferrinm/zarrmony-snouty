@@ -45,8 +45,12 @@ A single volumetric snapshot at one position. On disk, timepoints are the `NNNNN
 _Avoid_: frame, T-slice, volume (volume means the 3D array, not the axis element).
 
 **Scene**:
-The unit the reader exposes via `SnoutyReader.scenes`. Each scene is a `(T, C, Z, Y, X)` xarray. Named `<acquisition-dir>` for single-position acquisitions and `<acquisition-dir>__p<zero-padded-index>` for multi-position (double underscore is the boundary separator; the suffix only appears when needed to disambiguate).
+The unit the reader exposes via `SnoutyReader.scenes`. Each scene is a `(T, C, Z, Y, X)` xarray. Named `<acquisition-dir>` for single-position acquisitions and `<acquisition-dir>__p<zero-padded-index>` for multi-position (double underscore is the boundary separator; the suffix only appears when needed to disambiguate). On a *Plate* one scene is one *Field*, named `<acquisition-dir>__<canonical-well><field-token>` and always suffixed: `<dir>__A01r00c00` under the first grammar, `<dir>__A01` under the second.
 _Avoid_: image, series, dataset.
+
+**Plate format**:
+A standard well count, and the row-by-column grid it fixes: 6 is 2x3, 96 is 8x12, 384 is 16x24. Nothing on disk records which one an acquisition used, so the reader infers it by snapping the observed well extent up to the smallest format that contains it (ADR-0003). The `plate_format` constructor keyword overrides the inference and takes the well count, not the grid.
+_Avoid_: plate size, plate type, well count (the count alone names the format, but *plate format* names the decision).
 
 ### Vendor artefacts
 

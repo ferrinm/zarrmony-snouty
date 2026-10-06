@@ -1,6 +1,6 @@
 """zarrmony-snouty — Snouty (AndrewGYork SOLS) reader plugin for zarrmony.
 
-The package ships two ``ReaderPlugin`` values, both registered under the
+The package ships three ``ReaderPlugin`` values, all registered under the
 ``zarrmony.readers`` entry point declared in ``pyproject.toml``:
 
 - ``plugin`` — the v0.1 subdir-level matcher; fires on an individual
@@ -8,6 +8,10 @@ The package ships two ``ReaderPlugin`` values, both registered under the
 - ``session_plugin`` — the v0.3 session-level matcher; fires on a parent
   ``*_ht_sols_gui`` directory and fans out to one output store per
   non-empty child subdir in a single ``zarrmony convert`` invocation.
+- ``plate_plugin`` — the multiwell-plate matcher; fires on an acquisition
+  whose ``data/`` filenames carry well coordinates, and writes one OME-NGFF
+  HCS plate store. It matches on contents, never on the directory name, and
+  it outranks the other two. See ADR-0003.
 
 End users do not import from this package directly; they
 ``pip install zarrmony-snouty`` and zarrmony picks the plugins up
@@ -20,7 +24,12 @@ from pathlib import Path
 from zarrmony.readers.plugin import ReaderPlugin
 
 from .adapter import DEFAULT_MODE, SnoutyReader
-from .match import match, match_session
+from .match import match, match_plate, match_session
+from .plate import (
+    SnoutyPlateFormatError,
+    SnoutyPlateFormatWarning,
+    SnoutyPlateReader,
+)
 from .session import (
     SnoutySessionLayoutWarning,
     SnoutySessionReader,
@@ -28,12 +37,17 @@ from .session import (
 )
 
 __all__ = [
+    "SnoutyPlateFormatError",
+    "SnoutyPlateFormatWarning",
+    "SnoutyPlateReader",
     "SnoutyReader",
     "SnoutySessionLayoutWarning",
     "SnoutySessionReader",
     "SnoutySubdirSkippedWarning",
     "match",
+    "match_plate",
     "match_session",
+    "plate_plugin",
     "plugin",
     "session_plugin",
 ]
@@ -66,6 +80,15 @@ def _open_session(path: Path) -> SnoutySessionReader:
     return SnoutySessionReader(path, mode=mode, engine=engine)
 
 
+def _open_plate(path: Path) -> SnoutyPlateReader:
+    # Same env-var contract as the other two plugins. ``plate_format`` gets no
+    # env var: it is a per-plate correction, not a batch setting, and one
+    # stale value would mislabel every plate in a run.
+    mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
+    engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
+    return SnoutyPlateReader(path, mode=mode, engine=engine)
+
+
 plugin = ReaderPlugin(
     name="zarrmony-snouty",
     match=match,
@@ -78,6 +101,14 @@ session_plugin = ReaderPlugin(
     name="zarrmony-snouty-session",
     match=match_session,
     open=_open_session,
+    distribution="zarrmony-snouty",
+    source="entry_point",
+)
+
+plate_plugin = ReaderPlugin(
+    name="zarrmony-snouty-plate",
+    match=match_plate,
+    open=_open_plate,
     distribution="zarrmony-snouty",
     source="entry_point",
 )

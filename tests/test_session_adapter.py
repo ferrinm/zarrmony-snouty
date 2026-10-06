@@ -148,7 +148,7 @@ def test_zero_surviving_children_raises_snouty_data_error(tmp_path: Path) -> Non
     (bad / "metadata" / "x.txt").write_text("k: v\n")
 
     with pytest.warns(SnoutySubdirSkippedWarning):
-        with pytest.raises(SnoutyDataError, match="no valid _ht_sols_"):
+        with pytest.raises(SnoutyDataError, match="no valid acquisition"):
             SnoutySessionReader(session)
 
 

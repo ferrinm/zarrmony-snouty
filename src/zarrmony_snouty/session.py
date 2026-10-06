@@ -1,7 +1,9 @@
-"""Reader for a top-level Snouty GUI-session directory.
+"""Reader for a top-level Snouty session directory.
 
-A Snouty GUI session (directory whose name ends in ``_ht_sols_gui``) holds
-one or more acquisition subdirectories plus session-scoped position files.
+A Snouty session is any directory that holds one or more acquisition
+subdirectories, plus session-scoped position files. The GUI names one
+``_ht_sols_gui``, but an operator names the rest, so neither this reader nor
+``match_session`` tests the name (#34).
 This reader composes one lightweight :class:`SnoutyReader` per non-empty
 subdir and exposes their scenes flat-concatenated so a single
 ``zarrmony convert`` call fans out to N output stores.
@@ -61,6 +63,7 @@ from .adapter import (
     _load_xy_position_list,
     _PixelSizes,
 )
+from .match import has_snouty_sidecar
 
 __all__ = [
     "SnoutySessionLayoutWarning",
@@ -68,8 +71,6 @@ __all__ = [
     "SnoutySubdirSkippedWarning",
 ]
 
-
-_SUBDIR_SUFFIXES = ("_ht_sols_snap", "_ht_sols_acquire")
 
 # Machine-parseable reason tokens surfaced on SnoutySubdirSkippedWarning
 # messages. Tests grep for these to assert the skip reason without depending
@@ -80,17 +81,22 @@ _SkipReason = Literal[
     "missing_metadata_dir",
     "empty_data",
     "no_metadata",
+    "not_a_snouty_sidecar",
 ]
 
 
 class SnoutySubdirSkippedWarning(UserWarning):
-    """A ``_ht_sols_*`` child under a GUI-session directory failed shallow
-    validation and was dropped from the session's scene list.
+    """A candidate child under a session directory failed shallow validation
+    and was dropped from the session's scene list.
+
+    A candidate is any immediate subdirectory holding a ``data/`` or a
+    ``metadata/`` directory. The child's name is not tested, because an
+    operator writes it (#34).
 
     Message format is ``"<subdir-path>: <reason-token>"`` where the reason
     token is one of ``missing_data_dir``, ``missing_metadata_dir``,
-    ``empty_data``, ``no_metadata``. Downstream tooling can filter on the
-    token verbatim.
+    ``empty_data``, ``no_metadata``, ``not_a_snouty_sidecar``. Downstream
+    tooling can filter on the token verbatim.
     """
 
 
@@ -109,10 +115,10 @@ def _shallow_validate(subdir: Path) -> _SkipReason | None:
     """Return ``None`` if the subdir looks like a valid Snouty acquisition,
     or a machine-parseable reason token if it doesn't.
 
-    Cheap by design: at most one ``iterdir()`` per subdir check. This
-    function parses no metadata and reads no ``.tif`` header. It answers from
-    directory listings alone, because it runs for every candidate subdir,
-    including the ones it is about to reject.
+    Cheap by design: at most one ``iterdir()`` per subdir check, plus one
+    read of a ~1 KB sidecar. It reads no ``.tif`` header. The sidecar read is
+    what replaces the old name test — the child name is operator-written, so
+    the key set is the only evidence that a child is Snouty at all (#34).
     """
     data_dir = subdir / "data"
     metadata_dir = subdir / "metadata"
@@ -124,13 +130,15 @@ def _shallow_validate(subdir: Path) -> _SkipReason | None:
         return "empty_data"
     if not any(p.is_file() and p.suffix == ".txt" for p in metadata_dir.iterdir()):
         return "no_metadata"
+    if not has_snouty_sidecar(metadata_dir):
+        return "not_a_snouty_sidecar"
     return None
 
 
 class SnoutySessionReader:
     """Reader-protocol adapter for a Snouty GUI-session directory.
 
-    Composes one :class:`SnoutyReader` per surviving ``_ht_sols_*`` subdir
+    Composes one :class:`SnoutyReader` per surviving acquisition subdir
     and exposes the flat concatenation of every child's ``scenes`` list
     (verbatim — no session-level prefix, subdir names already carry the
     disambiguating information).
@@ -152,12 +160,17 @@ class SnoutySessionReader:
         # child in this GUI session. Length-checked per-child below.
         self._xy_positions = _load_xy_position_list(self._dir / _XY_POSITION_LIST_FILENAME)
 
-        # Enumerate immediate _ht_sols_* children in a stable order so scene
-        # indices are reproducible across runs.
+        # Enumerate candidate children in a stable order so scene indices are
+        # reproducible across runs. A candidate is any subdirectory that holds
+        # a data/ or a metadata/ dir — that is, anything shaped like an
+        # attempt at an acquisition. The name is not tested (#34). Selecting
+        # on shape rather than on full validity is what keeps the skip
+        # warnings below: a half-written child stays a candidate, so it gets
+        # named in a warning instead of disappearing.
         candidates = sorted(
             p
             for p in self._dir.iterdir()
-            if p.is_dir() and any(p.name.endswith(s) for s in _SUBDIR_SUFFIXES)
+            if p.is_dir() and ((p / "data").is_dir() or (p / "metadata").is_dir())
         )
 
         # Shallow-validate; emit one warning per skipped subdir. The message
@@ -177,7 +190,7 @@ class SnoutySessionReader:
 
         if not surviving:
             raise SnoutyDataError(
-                f"{self._dir}: no valid _ht_sols_* subdirectories found "
+                f"{self._dir}: no valid acquisition subdirectories found "
                 "after shallow validation; refusing to produce a zero-output "
                 "conversion"
             )

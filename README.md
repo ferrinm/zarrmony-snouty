@@ -1,10 +1,9 @@
 # zarrmony-snouty
 
 Snouty (single-objective light-sheet, "SOLS") reader plugin for
-[zarrmony](https://github.com/ferrinm/zarrmony). Detects a single Snouty GUI
-acquisition subdirectory (`*_ht_sols_snap` or `*_ht_sols_acquire`), a
-top-level GUI-session directory (`*_ht_sols_gui`), or a multiwell-plate
-acquisition, and converts the raw skewed volumes it contains to OME-NGFF 0.5:
+[zarrmony](https://github.com/ferrinm/zarrmony). Detects a single Snouty
+acquisition directory, a session directory holding several of them, or a
+multiwell-plate acquisition. Converts the raw skewed volumes to OME-NGFF 0.5:
 
 ```bash
 zarrmony convert /path/to/<ts>_000_ht_sols_snap ./out
@@ -72,10 +71,10 @@ Since v0.3 the default mode is `desheared`, so the Y extent of that store is
 `Y + max_shift` and not the vendor's `Y`. For the pre-v0.3 shape, see
 [Getting the pre-v0.3 output](#getting-the-pre-v03-output).
 
-### Whole GUI-session directory
+### Whole session directory
 
-Point `zarrmony convert` at the parent `*_ht_sols_gui/` directory to fan out
-to one output store per non-empty `_ht_sols_*` subdir in a single command:
+Point `zarrmony convert` at a directory holding several acquisitions to fan
+out to one output store per child in a single command:
 
 ```bash
 zarrmony convert /path/to/2026-07-14_10-12-21_ht_sols_gui ./out
@@ -85,8 +84,9 @@ Every child subdir produces one `<subdir-name>.ome.zarr` (or
 `<subdir-name>__pNNNNNN.ome.zarr` for multi-position subdirs). Empty or
 malformed subdirs are skipped at load time with a `SnoutySubdirSkippedWarning`
 naming the subdir path and a machine-parseable reason token
-(`missing_data_dir`, `missing_metadata_dir`, `empty_data`, `no_metadata`).
-A session with zero surviving subdirs raises `SnoutyDataError`.
+(`missing_data_dir`, `missing_metadata_dir`, `empty_data`, `no_metadata`,
+`not_a_snouty_sidecar`). A session with zero surviving subdirs raises
+`SnoutyDataError`.
 
 If the session dir contains `XY_stage_position_list.txt`, each multi-position
 subdir surfaces its stage coordinates as `attrs.zarrmony.stage.xy_mm` on the
@@ -426,21 +426,38 @@ before any pixel work starts.
   `-t` cannot scramble the timepoints. If a file carries no stamp the reader
   recognizes, it falls back to the zero-padded filename order and warns with
   `SnoutyTimestampWarning`.
-- **Whole GUI-session directories** — one `zarrmony convert` on
-  `*_ht_sols_gui/` produces one output store per non-empty subdir. Empty or
-  malformed subdirs are skipped with a warning.
+- **Whole session directories** — one `zarrmony convert` produces one output
+  store per child acquisition. Empty or malformed children are skipped with a
+  warning.
 - **Multiwell-plate acquisitions** — one `zarrmony convert` produces one
   OME-NGFF HCS plate store with well groups at `<row>/<column>/` and one
   image per imaged field. Both filename grammars are read, and the plate
   grid is inferred. See **Multiwell plate** above.
 
-Detection requires one of three shapes: a subdir whose name ends in
-`_ht_sols_snap` or `_ht_sols_acquire` with sibling `data/` and `metadata/`
-dirs (at least one `.tif` and one `.txt`); a parent GUI-session dir whose
-name ends in `_ht_sols_gui` and which contains at least one such subdir; or
-a directory with sibling `data/` and `metadata/` dirs whose `.tif` files all
-carry well coordinates. The plate matcher tests no part of the directory
-name. See Limitations for the remaining unsupported shape.
+### How detection works
+
+**No matcher tests the directory name.** The vendor GUI writes
+`_ht_sols_snap`, `_ht_sols_acquire` and `_ht_sols_gui`, but an operator names
+every scripted run, and scripted runs are the majority. On the reference
+share, a name-based matcher rejects 61% of real acquisitions. Detection reads
+the contents instead:
+
+| input | fires when |
+| ----- | ---------- |
+| acquisition | `data/` and `metadata/` exist, `data/` holds a `.tif`, and the first `metadata/*.txt` carries a quorum of the Snouty key set |
+| session | an immediate child is an acquisition |
+| plate | `data/` and `metadata/` exist, and every `.tif` in `data/` follows one well-coordinate grammar |
+
+A plate scores above the other two, so a plate converts as a plate whatever
+it is called.
+
+The sidecar test needs a *quorum* of the required keys, not all of them. A
+damaged sidecar still matches on purpose, so the reader opens it and raises
+`SnoutyMetadataError` naming the key that is absent. A matcher that demanded
+every key would make zarrmony fall through to bioio and report
+`UnsupportedFileFormatError`, which names nothing.
+
+See Limitations for the remaining unsupported shape.
 
 ## Limitations
 

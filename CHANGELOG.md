@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-10-07
+
 ### BREAKING
 
 - **No matcher tests the directory name any more** (#34). Detection reads the
@@ -20,8 +22,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     39 session directories. Those now convert.
   - The vendor GUI writes `_ht_sols_snap`, `_ht_sols_acquire` and
     `_ht_sols_gui`, but an operator names every scripted run, so the name was
-    never reliable evidence. ADR-0003 reached this conclusion for plates in
-    v0.4. It now covers every input kind.
+    never reliable evidence. ADR-0003 reached this conclusion for plates.
+    It now covers every input kind.
   - **A directory that is not Snouty can now be claimed if it holds a
     `metadata/*.txt` using six or more of the nine Snouty key names.** This is
     the cost of dropping the name test. No such collision is known.

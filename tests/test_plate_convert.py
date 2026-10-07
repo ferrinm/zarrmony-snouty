@@ -12,7 +12,7 @@ from pathlib import Path
 import zarr
 import zarrmony
 
-from tests.conftest import PlateSpec, write_synthetic_snouty
+from tests.conftest import PlateSpec, assert_no_metadata_warnings, write_synthetic_snouty
 
 # Two wells on the diagonal, two fields each. A01 and B02 are imaged; A02,
 # A03, B01 and B03 are not.
@@ -25,6 +25,7 @@ def test_convert_writes_one_hcs_plate_store(tmp_path: Path) -> None:
 
     audit = zarrmony.convert(fixture.dir, output)
 
+    assert_no_metadata_warnings(audit)
     plate = zarr.open_group(str(output), mode="r").attrs["ome"]["plate"]
     assert plate["name"] == fixture.dir.name
     assert [row["name"] for row in plate["rows"]] == ["A", "B"]
@@ -38,7 +39,7 @@ def test_each_field_lands_in_its_well_group(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path / "input", plate=DIAGONAL_PLATE)
     output = tmp_path / "plate.ome.zarr"
 
-    zarrmony.convert(fixture.dir, output)
+    assert_no_metadata_warnings(zarrmony.convert(fixture.dir, output))
 
     well = zarr.open_group(str(output / "A" / "01"), mode="r").attrs["ome"]["well"]
     assert [image["path"] for image in well["images"]] == ["0", "1"]
@@ -51,7 +52,7 @@ def test_unimaged_wells_get_no_group(tmp_path: Path) -> None:
     fixture = write_synthetic_snouty(tmp_path / "input", plate=DIAGONAL_PLATE)
     output = tmp_path / "plate.ome.zarr"
 
-    zarrmony.convert(fixture.dir, output)
+    assert_no_metadata_warnings(zarrmony.convert(fixture.dir, output))
 
     for unimaged in ("A/02", "A/03", "B/01", "B/03"):
         assert not (output / unimaged).exists(), f"{unimaged} was imaged by nobody"

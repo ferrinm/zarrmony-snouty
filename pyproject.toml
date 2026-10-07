@@ -21,6 +21,17 @@ dependencies = [
     # 0.9.0 is the floor for the HCS plate API (PlateLayout, PlateField,
     # Acquisition) that the plate reader populates.
     "zarrmony>=0.9.0",
+    # The reader builds the OME object zarrmony reads per scene (#39).
+    # zarrmony pulls ome-types in too, but this package imports it directly,
+    # so it declares it directly.
+    #
+    # 0.6.3 is the floor because it is what zarrmony 0.18 asks for and what
+    # this reader is tested against. No older release was tested, so the
+    # floor claims nothing about one.
+    #
+    # The zarrmony floor stays at 0.9.0 on purpose. 0.9.0 never reads
+    # ``ome_metadata``, and an unused property is harmless there.
+    "ome-types>=0.6.3",
     "tifffile>=2024.0",
     "dask>=2026.3.0",
     "numpy>=2",
@@ -75,6 +86,16 @@ exclude = ["*.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--strict-markers", "-ra"]
+filterwarnings = [
+    # zarrmony raises this when a soft-optional reader surface fails, and it
+    # also writes the failure into the store it is converting. A convert that
+    # warns ships a degraded store, so the suite treats it as an error (#39).
+    #
+    # Gated on this one category, not on UserWarning. This plugin raises
+    # SnoutyTimestampWarning, SnoutyPlateFormatWarning and two session
+    # warnings deliberately, and several tests assert on them.
+    "error::zarrmony.errors.ExtractorWarning",
+]
 markers = [
     "gpu: needs a CUDA device and cupy; skipped on a CPU-only host",
 ]

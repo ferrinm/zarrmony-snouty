@@ -28,6 +28,7 @@ import dask.array as da
 import numpy as np
 import tifffile
 import xarray as xr
+from ome_types.model import OME, Channel, Image, Pixels, PixelType
 
 from . import _deshear, _deshear_gpu, _engine, _hostmem, _pco_timestamp
 from ._engine import ResolvedEngine
@@ -217,6 +218,66 @@ class ScenePixels:
     def channel_names(self) -> list[str]:
         return [str(c) for c in self.meta.channels]
 
+    def ome_metadata(self, files: Sequence[Path], *, scene_index: int, scene_name: str) -> OME:
+        """The OME description of one scene. Each reader exposes it as a
+        zarrmony soft-optional ``ome_metadata`` property.
+
+        zarrmony reads ``ome.images[0]`` and ignores everything after it, and
+        it calls ``set_scene`` before it reads. So this returns exactly one
+        ``Image``, for the scene the caller names, and never one per scene. A
+        list would make every plate field report field zero.
+
+        A reader that exposes nothing here still converts: zarrmony catches
+        the ``AttributeError``, warns once per scene, writes the failure into
+        the store, and substitutes a stub ``Image``. The stub costs the
+        per-scene ``channels`` audit block and ``acquisition.date``
+        (issue #39).
+
+        Three values do not come from the sidecar, and each one is a silently
+        wrong store if taken from it:
+
+        - Z, Y and X come from :attr:`output_shape_zyx`. The sidecar records
+          the raw shape, and the default ``desheared`` mode changes it.
+        - T is the number of files in this scene. The sidecar
+          ``volumes_per_buffer`` is forced to 1 by :func:`_validate_v01_scope`.
+        - The physical sizes come from :attr:`physical_pixel_sizes`, which
+          reports a different Z in ``traditional`` mode.
+
+        ``objective`` and ``instruments`` stay unset. A Snouty sidecar records
+        no objective, and the instrument fields zarrmony reads already arrive
+        through :attr:`acquisition_audit`.
+        """
+        size_z, size_y, size_x = self.output_shape_zyx
+        spacing = self.physical_pixel_sizes
+        channels = self.channel_names
+        pixels = Pixels(
+            id=f"Pixels:{scene_index}",
+            size_t=len(files),
+            size_c=len(channels),
+            size_z=size_z,
+            size_y=size_y,
+            size_x=size_x,
+            physical_size_x=spacing.X,
+            physical_size_y=spacing.Y,
+            physical_size_z=spacing.Z,
+            dimension_order="XYZCT",
+            type=PixelType(DTYPE.name),
+            channels=[
+                Channel(id=f"Channel:{scene_index}:{index}", name=name)
+                for index, name in enumerate(channels)
+            ],
+        )
+        return OME(
+            images=[
+                Image(
+                    id=f"Image:{scene_index}",
+                    name=scene_name,
+                    acquisition_date=sidecar_datetime_from_text(self.meta.raw_text),
+                    pixels=pixels,
+                )
+            ]
+        )
+
     @property
     def acquisition_audit(self) -> dict:
         """Zarrmony soft-optional hook (zarrmony issue #76): inject
@@ -268,17 +329,18 @@ class ScenePixels:
 _SIDECAR_STAMP_TOLERANCE = dt.timedelta(hours=1)
 
 
-def _sidecar_datetime(path: Path) -> dt.datetime | None:
-    """Read the ``Date`` and ``Time`` fields out of one vendor sidecar.
+def sidecar_datetime_from_text(text: str) -> dt.datetime | None:
+    """Combine the ``Date`` and ``Time`` fields of one sidecar into a datetime.
 
-    Returns ``None`` when the file is absent or unreadable, or when either
-    field is missing or malformed. The caller treats ``None`` as "no
-    cross-check available", not as a failure.
+    Returns ``None`` when either field is missing or malformed. Two callers
+    rely on that: the timestamp cross-check below treats ``None`` as "no
+    cross-check available", and :attr:`ScenePixels.ome_metadata` leaves
+    ``acquisition_date`` unset. Neither treats it as a failure.
+
+    Reads the verbatim text rather than :attr:`SnoutyMetadata.raw`, because
+    the sidecar parser coerces every value it can and a date is one bad
+    coercion away from arithmetic.
     """
-    try:
-        text = path.read_text()
-    except OSError:
-        return None
     fields: dict[str, str] = {}
     for line in text.splitlines():
         key, separator, value = line.partition(":")
@@ -290,6 +352,18 @@ def _sidecar_datetime(path: Path) -> dt.datetime | None:
         return dt.datetime.strptime(f"{fields['Date']} {fields['Time']}", "%Y-%m-%d %H:%M:%S")
     except ValueError:
         return None
+
+
+def _sidecar_datetime(path: Path) -> dt.datetime | None:
+    """Read the ``Date`` and ``Time`` fields out of one vendor sidecar file.
+
+    Returns ``None`` when the file is absent or unreadable.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    return sidecar_datetime_from_text(text)
 
 
 def position_token(path: Path) -> str | None:

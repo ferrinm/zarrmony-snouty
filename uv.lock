@@ -2574,6 +2574,7 @@ source = { editable = "." }
 dependencies = [
     { name = "dask" },
     { name = "numpy" },
+    { name = "ome-types" },
     { name = "scipy" },
     { name = "tifffile" },
     { name = "xarray" },
@@ -2592,6 +2593,7 @@ dev = [
 requires-dist = [
     { name = "dask", specifier = ">=2026.3.0" },
     { name = "numpy", specifier = ">=2" },
+    { name = "ome-types", specifier = ">=0.6.3" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7" },

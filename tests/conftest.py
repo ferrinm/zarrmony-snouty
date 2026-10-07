@@ -155,6 +155,11 @@ STAMP_VOLUME_GAP = dt.timedelta(seconds=2)
 STAMP_FRAME_GAP = dt.timedelta(milliseconds=2)
 STAMP_FIRST_COUNTER = 1000
 
+#: The acquisition date of the first volume, as the sidecar records it and as
+#: zarrmony serializes it into the audit. The sidecar ``Time`` field has a
+#: resolution of one second, so the stamp's microseconds drop.
+SIDECAR_ACQUISITION_DATE = STAMP_EPOCH.replace(microsecond=0).isoformat()
+
 
 def _sidecar_text(fixture: SnoutyFixture, filename: str, when: dt.datetime) -> str:
     lines = [
@@ -322,6 +327,23 @@ def write_synthetic_snouty(
             )
 
     return fixture
+
+
+def assert_no_metadata_warnings(audit: dict) -> None:
+    """Fail if any store zarrmony wrote recorded a metadata extraction failure.
+
+    ``metadata_warnings`` is the record zarrmony writes into the store when a
+    soft-optional reader surface raises. It is the durable half of the
+    ``ExtractorWarning`` the console shows, so a test that only silences the
+    console still ships the failure (#39).
+
+    Accepts either audit shape, keyed on the layout zarrmony reports: a
+    ``per-scene`` convert returns one record per output store under
+    ``stores``, and a ``plate`` convert returns the one store record itself.
+    """
+    stores = audit["stores"] if audit["layout"] == "per-scene" else [audit]
+    for store in stores:
+        assert store["metadata_warnings"] == [], store["metadata_warnings"]
 
 
 @pytest.fixture

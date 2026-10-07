@@ -46,6 +46,7 @@ from typing import Literal
 
 import numpy as np
 import xarray as xr
+from ome_types.model import OME
 
 from . import _engine
 from ._engine import Engine, ResolvedEngine
@@ -364,6 +365,13 @@ class SnoutySessionReader:
     @property
     def metadata(self) -> str:
         return self._active_child().metadata
+
+    @property
+    def ome_metadata(self) -> OME:
+        """Delegate per scene, the same way ``channel_names`` does. The child
+        names the Image after its own scene, and a session scene name is the
+        child's name verbatim."""
+        return self._active_child().ome_metadata
 
     @property
     def acquisition_audit(self) -> dict:

@@ -53,6 +53,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/zarrmony_snouty"]
 
+[tool.hatch.build.targets.sdist]
+# Keep documentation out of the published sdist. The docs describe internal
+# consumers from time to time, and a distribution is the hardest place to
+# retract a file from.
+exclude = ["docs"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py313"

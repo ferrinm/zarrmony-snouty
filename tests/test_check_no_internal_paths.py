@@ -57,11 +57,11 @@ ALLOWED = [
     pytest.param("Set $SRC to the reference dataset's path.", id="env-placeholder"),
     pytest.param("metadata_<dataset>.json", id="dataset-placeholder"),
     pytest.param(
-        "owned by https://github.com/calicolabs/aperture-backend, which ingests.",
+        "owned by https://github.com/calicolabs/example-backend, which ingests.",
         id="public-calicolabs-org",
     ),
     pytest.param(
-        "The source of truth is `iac-aperture/deploy/arch/bigquery.tf`.",
+        "The source of truth is `infra-repo/deploy/arch/bigquery.tf`.",
         id="bare-internal-repo-path",
     ),
     pytest.param("Reviewers are `@calico/sweng-dev`.", id="codeowners-team"),

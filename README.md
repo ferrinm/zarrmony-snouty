@@ -501,7 +501,8 @@ See Limitations for the remaining unsupported shape.
   transform behind an `engine` selector, with a CPU fallback; ✅ **BREAKING**
   the default mode is now `desheared` and not `raw`; ✅ OME-NGFF HCS plate
   output for multiwell-plate acquisitions, detected by filename and never by
-  directory name.
+  directory name; ✅ **BREAKING** every matcher reads the contents of a
+  directory, and no matcher tests the directory name.
 
 ## Why a separate package?
 

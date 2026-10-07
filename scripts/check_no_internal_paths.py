@@ -110,6 +110,7 @@ SCANNED_SUFFIXES = {
     ".cfg",
     ".ini",
     ".sh",
+    ".xml",
 }
 
 

@@ -17,12 +17,16 @@ _Avoid_: light sheet (too generic), SOPI, oblique plane microscopy.
 ### Input hierarchy (what the plugin points at)
 
 **Session**:
-A GUI-driven run, on disk as a directory whose name ends in `_ht_sols_gui/`. Contains one or more acquisitions plus the shared `XY_stage_position_list.txt` and `focus_piezo_position_list.txt`. v0.3 accepts a session directory as multi-scene input — one output store per non-empty child acquisition.
+A directory that contains one or more acquisitions, plus the shared `XY_stage_position_list.txt` and `focus_piezo_position_list.txt`. The GUI names one `_ht_sols_gui/`, but an operator names the rest, so the reader identifies a session by its children and never by its name (see #34). v0.3 accepts a session directory as multi-scene input — one output store per valid child acquisition.
 _Avoid_: batch, GUI folder, parent dir.
 
 **Acquisition**:
-A single snap or continuous scan run, on disk as a subdirectory whose name ends in `_ht_sols_snap/` or `_ht_sols_acquire/`. Contains sibling `data/` and `metadata/` directories. This is v0.1's unit of input.
+A single snap or continuous scan run, on disk as a directory holding sibling `data/` and `metadata/` directories. This is v0.1's unit of input. The GUI names one `_ht_sols_snap/` or `_ht_sols_acquire/`, but most runs on the share are operator-named, so the reader identifies an acquisition by its `metadata/*.txt` key set and never by its name (see #34).
 _Avoid_: subdir, run, capture, folder.
+
+**Sidecar**:
+The `metadata/<name>.txt` key=value file the vendor writes next to each `data/*.tif`. Its key set is what identifies an acquisition as Snouty. `match.py` tests for a quorum of those keys, and `_metadata.py` requires the full set when it reads the values.
+_Avoid_: metadata file, header, manifest.
 
 **Position**:
 An XY stage location in a **flat** acquisition, addressed by ordinal. On disk, positions are the `MMMMMM` in `NNNNNN_pMMMMMM.tif` filenames. Multi-position acquisitions expose one scene per position (see #3). On a *Plate*, the same physical idea is a *Field* inside a *Well*, addressed by coordinate instead of by ordinal.

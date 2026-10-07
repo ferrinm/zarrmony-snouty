@@ -3,15 +3,17 @@
 The package ships three ``ReaderPlugin`` values, all registered under the
 ``zarrmony.readers`` entry point declared in ``pyproject.toml``:
 
-- ``plugin`` — the v0.1 subdir-level matcher; fires on an individual
-  ``*_ht_sols_snap``/``*_ht_sols_acquire`` acquisition directory.
+- ``plugin`` — the v0.1 acquisition-level matcher; fires on a directory with
+  ``data/`` and ``metadata/`` and a Snouty sidecar.
 - ``session_plugin`` — the v0.3 session-level matcher; fires on a parent
-  ``*_ht_sols_gui`` directory and fans out to one output store per
-  non-empty child subdir in a single ``zarrmony convert`` invocation.
+  directory holding such a child, and fans out to one output store per valid
+  child in a single ``zarrmony convert`` invocation.
 - ``plate_plugin`` — the multiwell-plate matcher; fires on an acquisition
   whose ``data/`` filenames carry well coordinates, and writes one OME-NGFF
-  HCS plate store. It matches on contents, never on the directory name, and
-  it outranks the other two. See ADR-0003.
+  HCS plate store. It outranks the other two.
+
+No matcher tests the directory name. An operator names most runs, so the
+name is not evidence. See ADR-0003 and its 2026-10-06 amendment.
 
 End users do not import from this package directly; they
 ``pip install zarrmony-snouty`` and zarrmony picks the plugins up

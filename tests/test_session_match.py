@@ -53,10 +53,39 @@ def test_rejects_session_without_children(tmp_path: Path) -> None:
     assert match_session(session) is None
 
 
-def test_rejects_dir_without_gui_suffix(tmp_path: Path) -> None:
-    session = tmp_path / "some_random_dir"
+# The GUI writes `_ht_sols_gui`, but the share also holds
+# `_ht_sols_gui_session` and operator-made grouping folders (#34). A directory
+# that holds acquisition children is a session whatever it is called.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "2023-11-22_15-36-30_ht_sols_gui_session",
+        "2024-05-02_09-23-59_ht_sols_gui_session_streak_reduction",
+        "some_random_dir",
+        "young",
+    ],
+)
+def test_matches_session_whatever_the_parent_is_called(tmp_path: Path, name: str) -> None:
+    session = tmp_path / name
     session.mkdir()
     write_synthetic_snouty(session, subdir_name="2026-07-14_10-15-35_000_ht_sols_snap")
+    assert match_session(session) == 100
+
+
+def test_matches_session_whose_children_are_operator_named(tmp_path: Path) -> None:
+    session = tmp_path / "2025-11-06_13-17-26_ht_sols_gui"
+    session.mkdir()
+    write_synthetic_snouty(session, subdir_name="2025-11-06_17-02-15_000_ht_sols_acquisition")
+    assert match_session(session) == 100
+
+
+def test_rejects_dir_whose_children_are_not_snouty(tmp_path: Path) -> None:
+    session = tmp_path / "2026-07-14_10-12-21_ht_sols_gui"
+    child = session / "2026-07-14_10-15-35_000_ht_sols_snap"
+    (child / "data").mkdir(parents=True)
+    (child / "metadata").mkdir()
+    (child / "data" / "x.tif").write_bytes(b"II*\x00")
+    (child / "metadata" / "x.txt").write_text("exposure: 10\n")
     assert match_session(session) is None
 
 

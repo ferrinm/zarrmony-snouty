@@ -9,6 +9,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### BREAKING
 
+- **No matcher tests the directory name any more** (#34). Detection reads the
+  contents of a directory instead. An acquisition is any directory with
+  `data/` and `metadata/`, a `.tif` under `data/`, and a `metadata/*.txt`
+  carrying a quorum of the Snouty key set. A session is any directory holding
+  such a child.
+  - **This widens what converts, and it does not narrow it.** Every directory
+    that matched before still matches. A survey of the reference share found
+    195 of 321 real acquisitions (61%) that the old name test rejected, plus
+    39 session directories. Those now convert.
+  - The vendor GUI writes `_ht_sols_snap`, `_ht_sols_acquire` and
+    `_ht_sols_gui`, but an operator names every scripted run, so the name was
+    never reliable evidence. ADR-0003 reached this conclusion for plates in
+    v0.4. It now covers every input kind.
+  - **A directory that is not Snouty can now be claimed if it holds a
+    `metadata/*.txt` using six or more of the nine Snouty key names.** This is
+    the cost of dropping the name test. No such collision is known.
+  - **A session now claims an operator folder that groups unrelated runs.**
+    Conversion emits one store per child, which is the intended output.
+  - `SnoutySubdirSkippedWarning` gains the reason token
+    `not_a_snouty_sidecar`.
+  - A matcher now reads one sidecar of about 1 KB. The older rule that a
+    matcher parses no metadata is withdrawn.
+
+### Fixed
+
+- **`zarrmony inspect` and `zarrmony convert` no longer fail with
+  `UnsupportedFileFormatError` on a readable Snouty acquisition** (#34). The
+  name test rejected the input, zarrmony fell through to the default bioio
+  reader, and bioio cannot read a directory. The error named nothing useful.
+- **A damaged sidecar now reports the key that is absent.** The matcher needs
+  a quorum of the key set, not all of it, so an acquisition missing one key
+  still reaches `SnoutyReader` and raises `SnoutyMetadataError` naming that
+  key.
+- **An unreadable `data/` or `metadata/` directory no longer propagates
+  `OSError` out of a matcher.** One unreadable child cannot take a whole
+  session down.
+
 - **The default `mode` is now `desheared`, not `raw`** (#11). The same
   command writes a different array: Y grows from `Y` to `Y + max_shift`, and
   each z-plane sits at its aligned Y offset. Z spacing does not change.

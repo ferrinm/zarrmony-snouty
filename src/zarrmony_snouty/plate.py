@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+from ome_types.model import OME
 from zarrmony.readers.plate import Acquisition, PlateField, PlateLayout
 
 from . import _engine
@@ -418,6 +419,20 @@ class SnoutyPlateReader:
         """Zarrmony soft-optional hook (zarrmony issue #76) — see
         :attr:`zarrmony_snouty._pixels.ScenePixels.acquisition_audit`."""
         return self._pixels.acquisition_audit
+
+    @property
+    def ome_metadata(self) -> OME:
+        """Zarrmony soft-optional surface (issue #39) — see
+        :meth:`zarrmony_snouty._pixels.ScenePixels.ome_metadata`.
+
+        One Image, for the active field. The plate writer sets the scene
+        before it asks, so a list of every field would label them all zero.
+        """
+        return self._pixels.ome_metadata(
+            self._scenes_files[self._active],
+            scene_index=self._active,
+            scene_name=self.scenes[self._active],
+        )
 
     def close(self) -> None:
         pass

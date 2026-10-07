@@ -46,6 +46,7 @@ from pathlib import Path
 
 import numpy as np
 import xarray as xr
+from ome_types.model import OME
 
 from . import _engine
 from ._engine import Engine, ResolvedEngine
@@ -216,6 +217,15 @@ class SnoutyReader:
         """Zarrmony soft-optional hook (zarrmony issue #76) — see
         :attr:`zarrmony_snouty._pixels.ScenePixels.acquisition_audit`."""
         return self._pixels.acquisition_audit
+
+    @property
+    def ome_metadata(self) -> OME:
+        """Zarrmony soft-optional surface (issue #39) — see
+        :meth:`zarrmony_snouty._pixels.ScenePixels.ome_metadata`."""
+        _, files = self._scenes_files[self._active]
+        return self._pixels.ome_metadata(
+            files, scene_index=self._active, scene_name=self.scenes[self._active]
+        )
 
     def close(self) -> None:
         pass

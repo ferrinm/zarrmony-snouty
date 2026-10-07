@@ -7,6 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Every Snouty reader now exposes `ome_metadata`** (#39). zarrmony 0.18.1
+  reads this surface once per scene. The property returns an
+  `ome_types.model.OME` that holds exactly one `Image`, for the active scene.
+  - The `Pixels` sizes match the array the writer writes, in all three modes.
+    Z, Y and X come from the output shape, never from the sidecar, because
+    the default `desheared` mode changes the shape. T is the number of files
+    in the scene, never the sidecar `volumes_per_buffer`, which the scope
+    validator forces to 1.
+  - `physical_size_x/y/z` come from `physical_pixel_sizes`, so the
+    `traditional` Z spacing stays correct.
+  - `acquisition_date` comes from the sidecar `Date` and `Time`.
+  - `objective` and `instruments` stay unset. A Snouty sidecar records no
+    objective.
+- `ome-types` is now a direct dependency. It was transitive through zarrmony.
+- `tests/test_flat_convert.py` is new (#39). No test called `zarrmony.convert`
+  on a flat acquisition or on a session before, which is why #39 shipped.
+  `tests/test_ome_metadata.py` is new too. It pins the `Pixels` sizes and the
+  physical sizes against the written array, in all three modes.
+
+### Fixed
+
+- **A convert no longer warns once per scene, and no longer writes that
+  warning into the store** (#39). Before this release every scene of every
+  convert raised `ExtractorWarning` and recorded one `metadata_warnings`
+  entry, because no reader defined `ome_metadata`. Two audit fields were
+  missing as a result: `per_scene[i].channels` and
+  `per_scene[i].acquisition.date`. Both are present now.
+
+### Changed
+
+- The test suite turns `zarrmony.errors.ExtractorWarning` into an error
+  (#39). The gate names that one category. This plugin raises four warnings
+  of its own that tests assert on, so a blanket `UserWarning` gate would
+  couple the suite to unrelated behavior.
+
 ## [0.3.0] — 2026-10-07
 
 ### BREAKING

@@ -15,6 +15,11 @@ The package ships three ``ReaderPlugin`` values, all registered under the
 No matcher tests the directory name. An operator names most runs, so the
 name is not evidence. See ADR-0003 and its 2026-10-06 amendment.
 
+None of the three accepts a reader kwarg. ``ZARRMONY_SNOUTY_MODE`` and
+``ZARRMONY_SNOUTY_ENGINE`` are the controls, and they are environment
+variables. A ``--reader-kwarg`` on a Snouty input raises
+``SnoutyReaderKwargError`` before the reader opens a file (#42).
+
 End users do not import from this package directly; they
 ``pip install zarrmony-snouty`` and zarrmony picks the plugins up
 automatically.
@@ -25,6 +30,7 @@ from pathlib import Path
 
 from zarrmony.readers.plugin import ReaderPlugin
 
+from ._errors import SnoutyReaderKwargError
 from .adapter import DEFAULT_MODE, SnoutyReader
 from .match import match, match_plate, match_session
 from .plate import (
@@ -43,6 +49,7 @@ __all__ = [
     "SnoutyPlateFormatWarning",
     "SnoutyPlateReader",
     "SnoutyReader",
+    "SnoutyReaderKwargError",
     "SnoutySessionLayoutWarning",
     "SnoutySessionReader",
     "SnoutySubdirSkippedWarning",
@@ -62,30 +69,56 @@ _MODE_ENV_VAR = "ZARRMONY_SNOUTY_MODE"
 _ENGINE_ENV_VAR = "ZARRMONY_SNOUTY_ENGINE"
 
 
-def _open(path: Path) -> SnoutyReader:
-    # ReaderPlugin.open only takes a path, so mode and engine are opted in
+def _reject_reader_kwargs(reader_kwargs: dict[str, object]) -> None:
+    """Refuse every reader kwarg, and name each one that was passed.
+
+    See :class:`SnoutyReaderKwargError` for why these readers reject rather
+    than ignore. Called before the reader is constructed, so no directory is
+    scanned and no file under ``data/`` is opened.
+    """
+    if not reader_kwargs:
+        return
+    names = ", ".join(repr(name) for name in sorted(reader_kwargs))
+    noun = "kwarg" if len(reader_kwargs) == 1 else "kwargs"
+    raise SnoutyReaderKwargError(
+        f"unsupported reader {noun} {names}. The Snouty readers accept no "
+        f"reader kwargs. Set {_MODE_ENV_VAR} for the output mode, or "
+        f"{_ENGINE_ENV_VAR} for the compute engine."
+    )
+
+
+def _open(path: Path, /, **reader_kwargs: object) -> SnoutyReader:
+    # The only supported input is a path, so mode and engine are opted in
     # through env vars — SnoutyReader validates both values and raises
-    # SnoutyModeError or SnoutyEngineError on an unknown one.
+    # SnoutyModeError or SnoutyEngineError on an unknown one. The ``**kwargs``
+    # exist to reject a reader kwarg with a sentence, never to accept one.
+    #
+    # ``path`` is positional-only on all three shims, and must stay that way.
+    # zarrmony passes the input positionally, so a named ``path`` would bind
+    # twice and raise the very TypeError this rejects.
+    _reject_reader_kwargs(reader_kwargs)
     mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutyReader(path, mode=mode, engine=engine)
 
 
-def _open_session(path: Path) -> SnoutySessionReader:
+def _open_session(path: Path, /, **reader_kwargs: object) -> SnoutySessionReader:
     # Same env-var contract as the subdir plugin; the session reader forwards
     # ``mode`` to every child SnoutyReader it instantiates, so a single
     # ``ZARRMONY_SNOUTY_MODE=desheared`` deshears every subdir in the batch.
     # ``engine`` is resolved by the session itself, which under ``auto`` picks
     # one engine for the whole batch.
+    _reject_reader_kwargs(reader_kwargs)
     mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutySessionReader(path, mode=mode, engine=engine)
 
 
-def _open_plate(path: Path) -> SnoutyPlateReader:
+def _open_plate(path: Path, /, **reader_kwargs: object) -> SnoutyPlateReader:
     # Same env-var contract as the other two plugins. ``plate_format`` gets no
     # env var: it is a per-plate correction, not a batch setting, and one
     # stale value would mislabel every plate in a run.
+    _reject_reader_kwargs(reader_kwargs)
     mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutyPlateReader(path, mode=mode, engine=engine)

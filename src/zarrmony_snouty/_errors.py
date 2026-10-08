@@ -9,6 +9,8 @@ import path is unchanged.
 
 from __future__ import annotations
 
+from zarrmony.errors import ReaderKwargError
+
 
 class SnoutyError(Exception):
     """Base class for zarrmony-snouty errors."""
@@ -37,6 +39,24 @@ class SnoutyDataError(SnoutyError):
 class SnoutyModeError(SnoutyError, ValueError):
     """The ``mode`` kwarg (or ``ZARRMONY_SNOUTY_MODE`` env var) is not one of
     ``raw`` / ``desheared`` / ``traditional``."""
+
+
+class SnoutyReaderKwargError(SnoutyError, ReaderKwargError):
+    """A reader kwarg reached a plugin ``open``, and these take none.
+
+    zarrmony forwards ``--reader-kwarg KEY=VALUE`` verbatim to the winning
+    plugin's ``open``. Without this error Python's argument binding raises a
+    ``TypeError``, which the zarrmony CLI does not catch, so the user gets a
+    stack trace (#42). The trigger is routine: zarrmony warns on every Snouty
+    convert that the source blocks do not nest in the write grid, and tells
+    the user to pass ``--reader-kwarg tile_size=...``. These readers cannot
+    honour that (#45), so the advice has to fail as a sentence.
+
+    ``zarrmony.errors.ReaderKwargError`` is one of the types that CLI turns
+    into a one-line message, and it is the type zarrmony defines for this
+    situation. ``SnoutyError`` keeps the error in this package's family, so a
+    library caller that catches ``SnoutyError`` still catches it.
+    """
 
 
 class SnoutyVolumesPerBufferUnsupportedError(SnoutyError, NotImplementedError):

@@ -31,5 +31,12 @@ jobs:
       - name: Format check
         run: .venv/bin/ruff format --check
 
+      # The same checker that `.pre-commit-config.yaml` runs. A contributor who
+      # clones and pushes without `pre-commit install` gets no hook, so without
+      # this step every rule in the checker is advisory (#59). `xargs` exits
+      # non-zero if any batch does, so a finding in any file fails the job.
+      - name: No internal paths
+        run: git ls-files -z | xargs -0 .venv/bin/python scripts/check_no_internal_paths.py
+
       - name: Test
         run: .venv/bin/pytest

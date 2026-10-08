@@ -9,6 +9,7 @@ cases. A rule that fires on ordinary prose gets suppressed with
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -53,6 +54,26 @@ CAUGHT = [
         id="private-sibling-blaze",
     ),
     pytest.param("git@github.com:example-user/zarrmony.git", id="private-sibling-ssh"),
+    # The same claim through a host that is not literally `github.com`, and
+    # through a path with an extra segment in front of the owner (#59). Both
+    # are ordinary shapes: a README embeds a snippet over the raw host, and a
+    # script reads metadata over the API host.
+    pytest.param(
+        "https://raw.githubusercontent.com/example-user/zarrmony/main/docs/x.md",
+        id="private-sibling-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/example-user/zarrmony",
+        id="private-sibling-api-host",
+    ),
+    pytest.param(
+        "https://raw.githubusercontent.com/calico/example-repo/main/x.tf",
+        id="internal-org-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/calico/example-repo",
+        id="internal-org-api-host",
+    ),
 ]
 
 
@@ -84,6 +105,21 @@ ALLOWED = [
     ),
     pytest.param("Install it from https://pypi.org/project/zarrmony/.", id="pypi-project"),
     pytest.param("The plugin entry point group is `zarrmony.readers`.", id="dotted-name"),
+    # The looser host and the extra path segments must not cost the negative
+    # cases. This repo is public over every host, and the public org keeps
+    # its own name under the raw host too.
+    pytest.param(
+        "https://raw.githubusercontent.com/example-user/zarrmony-snouty/main/README.md",
+        id="this-repo-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/example-user/zarrmony-snouty",
+        id="this-repo-api-host",
+    ),
+    pytest.param(
+        "https://raw.githubusercontent.com/calicolabs/example-backend/main/x.py",
+        id="public-calicolabs-raw-host",
+    ),
 ]
 
 
@@ -99,3 +135,43 @@ def test_allow_marker_suppresses_a_line(tmp_path: Path) -> None:
 
 def test_unscanned_suffixes_are_skipped(tmp_path: Path) -> None:
     assert scan_text(tmp_path, "/data/microscopy/export", name="notes.rst") == []
+
+
+# The checker, its tests and the convention doc quote the patterns they exist
+# to catch, so every rule fires on them. The skip list lives in the checker so
+# that CI and pre-commit agree about it (#59). Before that, only the
+# pre-commit config knew, and `check_no_internal_paths.py $(git ls-files)`
+# failed on a clean tree.
+SELF_DESCRIBING_FILES = [
+    pytest.param("scripts/check_no_internal_paths.py", id="the-checker"),
+    pytest.param("tests/test_check_no_internal_paths.py", id="its-tests"),
+    pytest.param("CONTRIBUTING.md", id="the-convention-doc"),
+]
+
+
+@pytest.mark.parametrize("relative", SELF_DESCRIBING_FILES)
+def test_self_describing_files_are_skipped(relative: str) -> None:
+    path = Path(__file__).resolve().parent.parent / relative
+    assert path.exists(), f"{relative} moved; update the skip list in the checker"
+    assert check.scan(path, check.RULES) == []
+
+
+def test_the_tracked_tree_is_clean() -> None:
+    """Every tracked file passes. This is what the CI step asserts (#59)."""
+    root = Path(__file__).resolve().parent.parent
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        pytest.skip("not a git checkout")
+
+    rules = check.RULES  # Not load_rules(): .internal-patterns is site-local.
+    problems: list[str] = []
+    for name in listing.stdout.split("\0"):
+        if name:
+            problems.extend(check.scan(root / name, rules))
+    assert problems == []

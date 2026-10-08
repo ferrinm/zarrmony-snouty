@@ -12,6 +12,8 @@ repos:
         entry: python scripts/check_no_internal_paths.py
         language: system
         pass_filenames: true
-        # The checker, its tests and the convention doc all name the patterns
-        # they exist to catch, so they would flag themselves.
-        exclude: ^(scripts/check_no_internal_paths\.py|tests/test_check_no_internal_paths\.py|CONTRIBUTING\.md)$
+        # No `exclude` here. The checker, its tests and the convention doc all
+        # name the patterns they exist to catch, so they would flag
+        # themselves — the checker skips them itself, in `SELF_DESCRIBING`.
+        # CI runs the same checker over `git ls-files`, and the two callers
+        # have to agree about which files are exempt (#59).

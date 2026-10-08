@@ -109,6 +109,8 @@ _Avoid_: backend, device, accelerator, mode (mode is the output geometry, engine
 The default engine setting. Means "use the GPU if this host has one and the volume fits on it, otherwise the CPU". Not a third engine — it resolves to `cpu` or `gpu` before any pixel work starts.
 _Avoid_: default, best, hybrid.
 
+### Plugin interface (#42)
+
 **Reader kwarg**:
-A `KEY=VALUE` pair that zarrmony forwards from `--reader-kwarg` to the winning plugin's `open`. These readers accept none and reject every one with `SnoutyReaderKwargError` (#42). *Mode*, *engine* and the host-memory budget are environment variables, never reader kwargs.
+A `KEY=VALUE` pair that zarrmony forwards from `--reader-kwarg` to the winning plugin's `open`. These readers accept none and reject every one with `SnoutyReaderKwargError`. *Mode*, *engine* and the host-memory budget are environment variables, never reader kwargs.
 _Avoid_: reader keyword, reader option, reader argument, open kwarg.

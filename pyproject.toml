@@ -39,9 +39,8 @@ dependencies = [
     # this reader is tested against. No older release was tested, so the
     # floor claims nothing about one.
     #
-    # The zarrmony floor is lower than 0.18 on purpose. A zarrmony before
-    # 0.18.1 never reads ``ome_metadata``, and an unused property is
-    # harmless there.
+    # The zarrmony floor stays below 0.18.1 on purpose. Only 0.18.1 reads
+    # ``ome_metadata``, and an unused property is harmless on anything older.
     "ome-types>=0.6.3",
     "tifffile>=2024.0",
     "dask>=2026.3.0",
@@ -61,6 +60,11 @@ dev = [
     "pytest-cov>=7",
     "ruff>=0.14",
     "pre-commit>=4",
+    # tests/test_reader_kwargs.py drives the real `zarrmony convert` CLI
+    # through click's CliRunner, because the error type only pays off inside
+    # the CLI (#42). zarrmony pulls click in too, but the tests import it
+    # directly, so it is declared directly.
+    "click>=8",
 ]
 
 [project.urls]

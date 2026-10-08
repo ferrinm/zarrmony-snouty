@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy
 import pytest
 from click.testing import CliRunner
 from zarrmony.cli import app
@@ -26,7 +27,7 @@ from zarrmony.errors import ReaderKwargError
 import zarrmony_snouty
 from tests.conftest import PlateSpec, write_synthetic_snouty
 from zarrmony_snouty import _open, _open_plate, _open_session
-from zarrmony_snouty.adapter import SnoutyError, SnoutyReaderKwargError
+from zarrmony_snouty.adapter import DEFAULT_MODE, SnoutyError, SnoutyReaderKwargError
 
 #: The kwarg the ``TileAlignmentWarning`` tells every Snouty user to pass.
 TILE_SIZE_KWARG = {"tile_size": "64,128"}
@@ -73,9 +74,20 @@ ENTRY_POINTS = [
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
 def test_opens_with_no_reader_kwargs(entry: EntryPoint, tmp_path: Path) -> None:
-    """The control. A convert that passes no reader kwarg is untouched."""
-    reader = entry.open_reader(entry.make_input(tmp_path))
-    assert reader.xarray_dask_data.ndim == 5
+    """The control. A convert that passes no reader kwarg is untouched.
+
+    The shim must contribute nothing of its own, so the reader it returns has
+    to match one built straight from the reader class with the same defaults.
+    """
+    path = entry.make_input(tmp_path)
+    reader_class = getattr(zarrmony_snouty, entry.reader_attr)
+    direct = reader_class(path, mode=DEFAULT_MODE, engine="auto")
+    through_the_shim = entry.open_reader(path)
+    assert through_the_shim.xarray_dask_data.shape == direct.xarray_dask_data.shape
+    numpy.testing.assert_array_equal(
+        through_the_shim.xarray_dask_data.data.compute(),
+        direct.xarray_dask_data.data.compute(),
+    )
 
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
@@ -92,6 +104,22 @@ def test_rejection_names_every_unknown_kwarg(entry: EntryPoint, tmp_path: Path) 
     message = str(caught.value)
     for name in TWO_KWARGS:
         assert name in message
+
+
+@pytest.mark.parametrize("entry", ENTRY_POINTS)
+def test_rejects_a_kwarg_that_collides_with_the_path_parameter(
+    entry: EntryPoint, tmp_path: Path
+) -> None:
+    """``path`` is the one name that argument binding claims before ``**``.
+
+    zarrmony passes the input positionally, so ``--reader-kwarg path=...``
+    raised ``got multiple values for argument 'path'`` — the same uncaught
+    ``TypeError`` this fix removes. ``path`` is positional-only now, so the
+    kwarg lands in ``**reader_kwargs`` and is rejected like any other.
+    """
+    with pytest.raises(SnoutyReaderKwargError) as caught:
+        entry.open_reader(entry.make_input(tmp_path), path="elsewhere")
+    assert "path" in str(caught.value)
 
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
@@ -178,8 +206,13 @@ def test_cli_convert_prints_a_sentence_and_no_traceback(entry: EntryPoint, tmp_p
             "tile_size=64,128",
         ],
     )
+    # ``CliRunner`` never prints a traceback into ``output``, so asserting on
+    # the word proves nothing. The exception type is the real discriminator.
+    # A ``ClickException`` leaves through ``SystemExit``. The uncaught
+    # ``TypeError`` this fix removes would land in ``result.exception`` as the
+    # ``TypeError`` itself.
     assert result.exit_code == 1
-    assert "Traceback" not in result.output
+    assert isinstance(result.exception, SystemExit)
     assert "tile_size" in result.output
     assert "ZARRMONY_SNOUTY_MODE" in result.output
     assert not (tmp_path / "out.ome.zarr").exists()

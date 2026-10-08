@@ -23,7 +23,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     library caller that catches the package base error still catches it.
   - Rejection happens before the reader is constructed. No directory is
     scanned, and no file under `data/` is opened.
-  - A convert that passes no reader kwarg is unchanged.
+  - `--reader-kwarg path=...` is rejected the same way. zarrmony passes the
+    input positionally, so a named `path` used to bind twice and raise
+    `got multiple values for argument 'path'`. The three `open` callables
+    take `path` positional-only now.
+  - A convert that passes no reader kwarg is unchanged. A store written by
+    this release matches one written by 0.3.1 byte for byte, apart from the
+    conversion timestamps and the output path in the audit.
 
 ### Changed
 
@@ -33,7 +39,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   arrived in zarrmony 0.13.0, so 0.9.0 through 0.12.0 could never reach a
   plugin `open` with a reader kwarg at all.
 
-### Known issues
+### Known limitations
 
 - zarrmony prints a `TileAlignmentWarning` on every Snouty convert that
   advises `--reader-kwarg tile_size=...`. These readers cannot honour it.

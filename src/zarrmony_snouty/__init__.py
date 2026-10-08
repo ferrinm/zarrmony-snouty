@@ -15,6 +15,11 @@ The package ships three ``ReaderPlugin`` values, all registered under the
 No matcher tests the directory name. An operator names most runs, so the
 name is not evidence. See ADR-0003 and its 2026-10-06 amendment.
 
+None of the three accepts a reader kwarg. ``ZARRMONY_SNOUTY_MODE`` and
+``ZARRMONY_SNOUTY_ENGINE`` are the controls, and they are environment
+variables. A ``--reader-kwarg`` on a Snouty input raises
+``SnoutyReaderKwargError`` before the reader opens a file (#42).
+
 End users do not import from this package directly; they
 ``pip install zarrmony-snouty`` and zarrmony picks the plugins up
 automatically.
@@ -67,17 +72,9 @@ _ENGINE_ENV_VAR = "ZARRMONY_SNOUTY_ENGINE"
 def _reject_reader_kwargs(reader_kwargs: dict[str, object]) -> None:
     """Refuse every reader kwarg, and name each one that was passed.
 
-    zarrmony hands ``--reader-kwarg KEY=VALUE`` straight to the winning
-    plugin's ``open`` as ``**reader_kwargs``. These three readers take none,
-    so without this check Python's argument binding raises a ``TypeError``
-    that the zarrmony CLI does not catch, and the user gets a stack trace
-    (#42). The trigger is routine: zarrmony warns on every Snouty convert
-    that the source blocks do not nest in the write grid, and tells the user
-    to pass ``--reader-kwarg tile_size=...``. This reader cannot honour that
-    (#45), so the advice has to fail as a sentence, not as a traceback.
-
-    Called before the reader is constructed, so no directory is scanned and
-    no file under ``data/`` is opened.
+    See :class:`SnoutyReaderKwargError` for why these readers reject rather
+    than ignore. Called before the reader is constructed, so no directory is
+    scanned and no file under ``data/`` is opened.
     """
     if not reader_kwargs:
         return
@@ -90,17 +87,22 @@ def _reject_reader_kwargs(reader_kwargs: dict[str, object]) -> None:
     )
 
 
-def _open(path: Path, **reader_kwargs: object) -> SnoutyReader:
-    # ReaderPlugin.open only takes a path, so mode and engine are opted in
+def _open(path: Path, /, **reader_kwargs: object) -> SnoutyReader:
+    # The only supported input is a path, so mode and engine are opted in
     # through env vars — SnoutyReader validates both values and raises
-    # SnoutyModeError or SnoutyEngineError on an unknown one.
+    # SnoutyModeError or SnoutyEngineError on an unknown one. The ``**kwargs``
+    # exist to reject a reader kwarg with a sentence, never to accept one.
+    #
+    # ``path`` is positional-only on all three shims, and must stay that way.
+    # zarrmony passes the input positionally, so a named ``path`` would bind
+    # twice and raise the very TypeError this rejects.
     _reject_reader_kwargs(reader_kwargs)
     mode = os.environ.get(_MODE_ENV_VAR, DEFAULT_MODE)
     engine = os.environ.get(_ENGINE_ENV_VAR, "auto")
     return SnoutyReader(path, mode=mode, engine=engine)
 
 
-def _open_session(path: Path, **reader_kwargs: object) -> SnoutySessionReader:
+def _open_session(path: Path, /, **reader_kwargs: object) -> SnoutySessionReader:
     # Same env-var contract as the subdir plugin; the session reader forwards
     # ``mode`` to every child SnoutyReader it instantiates, so a single
     # ``ZARRMONY_SNOUTY_MODE=desheared`` deshears every subdir in the batch.
@@ -112,7 +114,7 @@ def _open_session(path: Path, **reader_kwargs: object) -> SnoutySessionReader:
     return SnoutySessionReader(path, mode=mode, engine=engine)
 
 
-def _open_plate(path: Path, **reader_kwargs: object) -> SnoutyPlateReader:
+def _open_plate(path: Path, /, **reader_kwargs: object) -> SnoutyPlateReader:
     # Same env-var contract as the other two plugins. ``plate_format`` gets no
     # env var: it is a per-plate correction, not a batch setting, and one
     # stale value would mislabel every plate in a run.

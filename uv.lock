@@ -2583,6 +2583,7 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
+    { name = "click" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-cov" },
@@ -2591,6 +2592,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "dask", specifier = ">=2026.3.0" },
     { name = "numpy", specifier = ">=2" },
     { name = "ome-types", specifier = ">=0.6.3" },

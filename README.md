@@ -431,9 +431,8 @@ ZARRMONY_SNOUTY_ENGINE for the compute engine.
 
 zarrmony prints a `TileAlignmentWarning` on every Snouty convert that advises
 exactly this kwarg. Ignore that advice. The hint is not plugin-aware, and
-these readers cannot tile laterally. The vendor writes untiled,
-single-strip TIFF pages, so there is no sub-region read below one page. The
-warning is tracked upstream.
+these readers cannot tile laterally. Lateral tile control was considered and
+refused (#45). The warning itself is tracked upstream.
 
 ## Supported acquisitions
 

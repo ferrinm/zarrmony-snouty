@@ -55,8 +55,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     text points at the existing `engine_used` attribute and at the existing
     `zarrmony_snouty` audit block. No new field.
 
+- **The GPU-node runbook now sizes a long convert** (#52, from the field
+  report in #44). `README.md` said what to ask for in cores, memory and
+  device, and nothing about wall time. Two cluster jobs in #44 died on a time
+  limit because the plan sized the work from the input bytes. No source
+  changed.
+  - A new "Sizing a long convert" subsection gives the rule: ask for wall time
+    by scene count, never by input bytes. It carries two measured plate rates
+    on one TITAN RTX, 0.54 and 0.45 scenes per minute, and the worked example
+    that a 3456-scene plate needs 125 to 135 hours.
+  - The subsection states that a plate convert is all-or-nothing, because
+    zarrmony writes the plate audit after the last field and `convert` has no
+    resume flag. It states that a flat or session convert keeps every scene
+    that finished, because that path writes each audit inside the scene loop.
+  - A matching limitation entry records the all-or-nothing plate convert.
+
 ### Known limitations
 
+- **An interrupted plate convert loses every field it wrote.** zarrmony
+  writes the plate audit after the last field, and `zarrmony convert` has no
+  resume flag. A plate that runs for days therefore has no safe interruption
+  point. Nothing in this repository can change that. The missing resume is
+  tracked upstream. A flat or session convert is unaffected.
 - zarrmony prints a `TileAlignmentWarning` on every Snouty convert that
   advises `--reader-kwarg tile_size=...`. These readers cannot honour it.
   The hint is not plugin-aware, and nothing in this repository can suppress

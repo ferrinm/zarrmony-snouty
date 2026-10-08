@@ -7,6 +7,40 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **An unsupported `--reader-kwarg` now fails with one sentence, not a stack
+  trace** (#42). zarrmony hands `--reader-kwarg KEY=VALUE` straight to the
+  winning plugin's `open`. All three entry points here took a path and
+  nothing else, so any reader kwarg raised a `TypeError` that the zarrmony
+  CLI does not catch. The user saw a traceback and got no store.
+  - The three entry points now accept reader kwargs and reject every one of
+    them with the new `SnoutyReaderKwargError`. The message names each
+    rejected kwarg and points at the `ZARRMONY_SNOUTY_MODE` and
+    `ZARRMONY_SNOUTY_ENGINE` environment variables.
+  - The error is a `zarrmony.errors.ReaderKwargError`, which the zarrmony CLI
+    converts into a one-line message. It is also a `SnoutyError`, so a
+    library caller that catches the package base error still catches it.
+  - Rejection happens before the reader is constructed. No directory is
+    scanned, and no file under `data/` is opened.
+  - A convert that passes no reader kwarg is unchanged.
+
+### Changed
+
+- **The `zarrmony` floor moves from 0.9.0 to 0.15.0** (#42). 0.15.0 added
+  `zarrmony.errors.ReaderKwargError`, which this package now imports at
+  module scope. Nothing is lost below that floor: `reader_kwargs` forwarding
+  arrived in zarrmony 0.13.0, so 0.9.0 through 0.12.0 could never reach a
+  plugin `open` with a reader kwarg at all.
+
+### Known issues
+
+- zarrmony prints a `TileAlignmentWarning` on every Snouty convert that
+  advises `--reader-kwarg tile_size=...`. These readers cannot honour it.
+  The hint is not plugin-aware, and nothing in this repository can suppress
+  it. Lateral tile control was considered and refused (#45). The warning is
+  tracked upstream.
+
 ## [0.3.1] — 2026-10-07
 
 Point release for #39. Every convert on 0.3.0 warned once per scene and wrote

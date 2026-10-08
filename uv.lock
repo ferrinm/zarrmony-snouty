@@ -2601,7 +2601,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.13" },
     { name = "tifffile", specifier = ">=2024.0" },
     { name = "xarray", specifier = ">=2025.9.0" },
-    { name = "zarrmony", specifier = ">=0.9.0" },
+    { name = "zarrmony", specifier = ">=0.15.0" },
 ]
 provides-extras = ["dev"]
 

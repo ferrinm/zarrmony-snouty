@@ -413,6 +413,28 @@ variable raises a `SnoutyHostMemoryError`.
 `SnoutyReader.transform_footprint_bytes` reports what one task will reserve,
 before any pixel work starts.
 
+### `--reader-kwarg` is not supported
+
+These readers accept no reader kwargs. `ZARRMONY_SNOUTY_MODE`,
+`ZARRMONY_SNOUTY_ENGINE` and `ZARRMONY_SNOUTY_HOST_MEMORY_BYTES` are the
+controls, and they are environment variables.
+
+Any `--reader-kwarg` on a Snouty input raises a `SnoutyReaderKwargError`
+before the reader opens a file:
+
+```bash
+$ zarrmony convert --reader-kwarg tile_size=64,128 /path/to/…_ht_sols_snap ./out
+Error: unsupported reader kwarg 'tile_size'. The Snouty readers accept no
+reader kwargs. Set ZARRMONY_SNOUTY_MODE for the output mode, or
+ZARRMONY_SNOUTY_ENGINE for the compute engine.
+```
+
+zarrmony prints a `TileAlignmentWarning` on every Snouty convert that advises
+exactly this kwarg. Ignore that advice. The hint is not plugin-aware, and
+these readers cannot tile laterally. The vendor writes untiled,
+single-strip TIFF pages, so there is no sub-region read below one page. The
+warning is tracked upstream.
+
 ## Supported acquisitions
 
 - **Single- or multi-position, single- or multi-timepoint, single- or

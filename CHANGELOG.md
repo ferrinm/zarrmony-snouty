@@ -38,17 +38,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     the checker ran as a pre-commit hook only. A contributor who clones and
     pushes without `pre-commit install` gets no hook. That contributor can
     land an internal path, and CI stays green.
-  - The two GitHub rules match the host more loosely and allow extra path
-    segments before the name. `raw.githubusercontent.com/<owner>/zarrmony`
-    and `api.github.com/repos/<owner>/zarrmony` passed, because the rules
-    demanded the literal `github.com` followed by one segment. The rule for
-    the internal org had the same gap. This change fixes both rules.
+  - The two GitHub rules match the host more loosely and allow up to two
+    path segments before the owner. `raw.githubusercontent.com/<owner>/`
+    and `api.github.com/repos/<owner>/` passed, because the rules demanded
+    the literal `github.com` followed by one segment. The rule for the
+    internal org had the same gap. This change fixes both rules, and the
+    host now covers `github.dev` and `codeload.github.com` too.
+  - Two segments is the ceiling on purpose. An open count also matches a
+    name deep inside a path, so a link into this public repository fires on
+    any directory called `zarrmony` or `calico`. Both shapes are now
+    negative cases in the tests.
   - The skip list for the three self-describing files moves from
     `.pre-commit-config.yaml` into the checker, as `SELF_DESCRIBING`. The
     hook and the CI step must agree about it.
   - `tests/test_check_no_internal_paths.py` gains the new URL shapes, the
     matching negative cases for this public repository, and a test that
-    scans every tracked file.
+    scans every tracked file. `REPO_ROOT` and `tracked_files` move to
+    `tests/conftest.py`, because the sdist tests need them too.
 
 ## [0.3.2] — 2026-10-08
 

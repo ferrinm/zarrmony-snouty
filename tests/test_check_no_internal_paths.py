@@ -9,11 +9,12 @@ cases. A rule that fires on ordinary prose gets suppressed with
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import REPO_ROOT, tracked_files
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_no_internal_paths.py"
 _spec = importlib.util.spec_from_file_location("check_no_internal_paths", _SCRIPT)
@@ -74,6 +75,10 @@ CAUGHT = [
         "https://api.github.com/repos/calico/example-repo",
         id="internal-org-api-host",
     ),
+    pytest.param(
+        "open it in https://github.dev/example-user/zarrmony",
+        id="private-sibling-web-editor",
+    ),
 ]
 
 
@@ -120,6 +125,17 @@ ALLOWED = [
         "https://raw.githubusercontent.com/calicolabs/example-backend/main/x.py",
         id="public-calicolabs-raw-host",
     ),
+    # The owner slot is the only slot the rules read. A deep link into this
+    # public repository must survive a directory that shares a blocked name,
+    # because the path says nothing about who can read the repository.
+    pytest.param(
+        "https://github.com/example-user/zarrmony-snouty/tree/main/tests/zarrmony",
+        id="deep-link-with-a-zarrmony-directory",
+    ),
+    pytest.param(
+        "https://github.com/example-user/zarrmony-snouty/blob/main/src/calico/x.py",
+        id="deep-link-with-a-calico-directory",
+    ),
 ]
 
 
@@ -142,36 +158,30 @@ def test_unscanned_suffixes_are_skipped(tmp_path: Path) -> None:
 # that CI and pre-commit agree about it (#59). Before that, only the
 # pre-commit config knew, and `check_no_internal_paths.py $(git ls-files)`
 # failed on a clean tree.
-SELF_DESCRIBING_FILES = [
-    pytest.param("scripts/check_no_internal_paths.py", id="the-checker"),
-    pytest.param("tests/test_check_no_internal_paths.py", id="its-tests"),
-    pytest.param("CONTRIBUTING.md", id="the-convention-doc"),
-]
+def test_the_skip_list_names_the_three_self_describing_files() -> None:
+    assert check.SELF_DESCRIBING == {
+        Path("scripts/check_no_internal_paths.py"),
+        Path("tests/test_check_no_internal_paths.py"),
+        Path("CONTRIBUTING.md"),
+    }
 
 
-@pytest.mark.parametrize("relative", SELF_DESCRIBING_FILES)
-def test_self_describing_files_are_skipped(relative: str) -> None:
-    path = Path(__file__).resolve().parent.parent / relative
-    assert path.exists(), f"{relative} moved; update the skip list in the checker"
+@pytest.mark.parametrize("relative", sorted(check.SELF_DESCRIBING), ids=str)
+def test_self_describing_files_are_skipped(relative: Path) -> None:
+    path = REPO_ROOT / relative
+    assert path.exists(), f"{relative} moved; update SELF_DESCRIBING in the checker"
     assert check.scan(path, check.RULES) == []
 
 
 def test_the_tracked_tree_is_clean() -> None:
-    """Every tracked file passes. This is what the CI step asserts (#59)."""
-    root = Path(__file__).resolve().parent.parent
-    listing = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if listing.returncode != 0:
-        pytest.skip("not a git checkout")
+    """Every tracked file passes. This is what the CI step asserts (#59).
 
-    rules = check.RULES  # Not load_rules(): .internal-patterns is site-local.
+    The rules are ``RULES`` rather than ``load_rules()``. ``load_rules()``
+    adds ``.internal-patterns``, which is untracked and site-local, so a
+    test that read it would give a different answer on every host (#43).
+    CI has no ``.internal-patterns`` either, so the two agree there.
+    """
     problems: list[str] = []
-    for name in listing.stdout.split("\0"):
-        if name:
-            problems.extend(check.scan(root / name, rules))
+    for path in tracked_files():
+        problems.extend(check.scan(path, check.RULES))
     assert problems == []

@@ -61,11 +61,11 @@ The CI step is the binding one. A contributor who clones and pushes without
 To run the checker by hand over the whole tree:
 
 ```bash
-git ls-files -z | xargs -0 python scripts/check_no_internal_paths.py
+git ls-files -z | xargs -0 uv run python scripts/check_no_internal_paths.py
 ```
 
 The checker, its tests and this document all quote the patterns they exist to
-catch, so each one would flag itself. The checker skips those three files. The
+catch, so every rule fires on them. The checker skips those three files. The
 list is `SELF_DESCRIBING` in `scripts/check_no_internal_paths.py`, and it is
 there rather than in the hook config so that both callers read the same list.
 

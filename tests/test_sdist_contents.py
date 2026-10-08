@@ -9,27 +9,26 @@ because `.github/workflows/release.yml` builds from a fresh checkout.
 
 These tests build from a copy of the tracked tree with that untracked state
 planted back in. The copy keeps the answer the same on every host. A fresh CI
-checkout has no `.claude/`, so a test against the real working tree would
-pass there even with the defect present.
+checkout has no `.claude/`, so a test against the real working tree passes
+there even with the defect present.
 """
 
 from __future__ import annotations
 
 import shutil
-import subprocess
 import tarfile
 from pathlib import Path
 
 import pytest
 from hatchling.builders.sdist import SdistBuilder
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from tests.conftest import REPO_ROOT, tracked_files
 
 # Untracked state that a maintainer tree holds and `.gitignore` does not name.
-# `.claude/sessions/` and `.claude/scheduled_tasks.json` are ignored; the rest
-# of `.claude/` is not, which is how three repository copies reached a local
-# sdist.
-PLANTED = {
+# `.gitignore` names `.claude/sessions/` and `.claude/scheduled_tasks.json`
+# only. The rest of `.claude/` is left, which is how three repository copies
+# reached a local sdist.
+UNTRACKED_MAINTAINER_STATE = {
     ".claude/settings.local.json": '{"permissions": {}}\n',
     ".claude/worktrees/issue-1/pyproject.toml": '[project]\nname = "copy"\n',
     ".claude/worktrees/issue-1/src/zarrmony_snouty/__init__.py": "",
@@ -62,21 +61,8 @@ EXPECTED_TOP_LEVEL = frozenset(
 
 def _copy_tracked_tree(destination: Path) -> None:
     """Copy every tracked file into ``destination``, keeping the layout."""
-    listing = subprocess.run(
-        ["git", "ls-files", "-z"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if listing.returncode != 0:
-        pytest.skip("not a git checkout")
-
-    for name in listing.stdout.split("\0"):
-        source = REPO_ROOT / name
-        if not name or not source.is_file():
-            continue
-        target = destination / name
+    for source in tracked_files():
+        target = destination / source.relative_to(REPO_ROOT)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
 
@@ -89,7 +75,7 @@ def sdist_members(tmp_path_factory: pytest.TempPathFactory) -> frozenset[str]:
     source.mkdir()
     _copy_tracked_tree(source)
 
-    for name, text in PLANTED.items():
+    for name, text in UNTRACKED_MAINTAINER_STATE.items():
         planted = source / name
         planted.parent.mkdir(parents=True, exist_ok=True)
         planted.write_text(text, encoding="utf-8")
@@ -105,7 +91,7 @@ def sdist_members(tmp_path_factory: pytest.TempPathFactory) -> frozenset[str]:
     return frozenset(name.split("/", 1)[1] for name in names if "/" in name)
 
 
-@pytest.mark.parametrize("planted", sorted(PLANTED))
+@pytest.mark.parametrize("planted", sorted(UNTRACKED_MAINTAINER_STATE))
 def test_untracked_maintainer_state_stays_out(sdist_members: frozenset[str], planted: str) -> None:
     assert planted not in sdist_members
 

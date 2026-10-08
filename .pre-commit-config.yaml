@@ -13,7 +13,7 @@ repos:
         language: system
         pass_filenames: true
         # No `exclude` here. The checker, its tests and the convention doc all
-        # name the patterns they exist to catch, so they would flag
-        # themselves — the checker skips them itself, in `SELF_DESCRIBING`.
-        # CI runs the same checker over `git ls-files`, and the two callers
-        # have to agree about which files are exempt (#59).
+        # name the patterns they exist to catch, so every rule fires on them.
+        # The checker skips those three itself, in `SELF_DESCRIBING`. CI runs
+        # the same checker over `git ls-files`, and the two callers must agree
+        # about which files are exempt (#59).

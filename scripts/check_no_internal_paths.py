@@ -27,7 +27,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # These three files quote the patterns they exist to catch, so the rules below
 # fire on them. The list lives here rather than in `.pre-commit-config.yaml`
 # because two callers need it: the hook, and the CI step that runs the checker
-# over `git ls-files` (#59). One of them knowing is how a clean tree failed.
+# over `git ls-files` (#59). Before this, only the hook knew, so a tree scan
+# failed on a clean tree.
 SELF_DESCRIBING = frozenset(
     {
         Path("scripts/check_no_internal_paths.py"),
@@ -37,18 +38,22 @@ SELF_DESCRIBING = frozenset(
 )
 
 # The hosts that serve a GitHub repository. `github.com` covers the web UI,
-# the SSH remote and `api.github.com`; `githubusercontent.com` covers
+# the SSH remote, `api.github.com` and `codeload.github.com`. `github.dev`
+# covers the web editor, and `githubusercontent.com` covers
 # `raw.githubusercontent.com`. A rule that demanded the literal `github.com`
 # missed the raw host, which is the normal way a README embeds a snippet from
 # another repository (#59).
-GITHUB_HOST = r"github(?:usercontent)?\.com[/:]"
+GITHUB_HOST = r"github(?:usercontent\.com|\.com|\.dev)[/:]"
 
-# Path segments between the host and the name being matched. There can be
-# none (`raw.githubusercontent.com/<owner>/`), one (`github.com/<owner>/`) or
-# two (`api.github.com/repos/<owner>/`), and an unseen shape must not get a
-# free pass, so the count is open. The segment class excludes `/`, so each
-# repetition consumes exactly one segment and the match cannot blow up.
-PATH_SEGMENTS = r"(?:[A-Za-z0-9_.-]+/)*"
+# Path segments between the host and the owner or repository name. There are
+# none on the raw host (`raw.githubusercontent.com/<owner>/`), one on the web
+# host (`github.com/<owner>/`), and two on the API host
+# (`api.github.com/repos/<owner>/`). Two is the ceiling on purpose. An open
+# count also matches a name deep inside a path, so a link into this public
+# repository fires on any directory called `zarrmony` or `calico`, and
+# CONTRIBUTING.md says that a rule which fires on ordinary text gets
+# suppressed until it protects nothing.
+PATH_SEGMENTS = r"(?:[A-Za-z0-9_.-]+/){0,2}"
 
 # Patterns kept here are *structural* — they describe the shape of an internal
 # path, never the name of a specific lab, collaborator or study. A blocklist

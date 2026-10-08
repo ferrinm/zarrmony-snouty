@@ -307,11 +307,36 @@ def test_each_mode_matches_the_flat_reader_on_the_same_volume(tmp_path: Path, mo
     ), "a plate field and a flat scene must go through one pixel path"
 
 
-@pytest.mark.parametrize("engine", ["auto", "cpu"])
-def test_the_cpu_engines_run(tmp_path: Path, engine) -> None:
+def test_the_cpu_engine_runs(tmp_path: Path) -> None:
+    """``cpu`` is the one engine value that resolves to the CPU on every host.
+
+    ``auto`` does not, because it reads the host. It has its own test below,
+    which fixes the device leaves rather than trusting them (#43).
+    """
     fixture = write_synthetic_snouty(tmp_path, plate=PlateSpec(grammar="A"))
-    reader = SnoutyPlateReader(fixture.dir, mode="traditional", engine=engine)
+    reader = SnoutyPlateReader(fixture.dir, mode="traditional", engine="cpu")
     assert reader.engine_used == "cpu"
+    assert reader.acquisition_audit["microscope"] == "HT-SOLS"
+    assert reader.xarray_dask_data.data.compute().any()
+
+
+def test_auto_falls_back_to_the_cpu_and_the_plate_still_converts(
+    tmp_path: Path, fake_device
+) -> None:
+    """The plate reader shares one resolver with the flat and session readers,
+    so ``tests/test_engine.py`` owns the decision table. What this adds is the
+    plate shim: the kwarg reaches that resolver, the fallback reason survives
+    on the reader, and the pixels still come out.
+
+    The device leaves are fixed, so the answer is the same on a GPU host.
+    """
+    fixture = write_synthetic_snouty(tmp_path, plate=PlateSpec(grammar="A"))
+    fake_device(cupy_available=False, free_bytes=None)
+
+    reader = SnoutyPlateReader(fixture.dir, mode="traditional", engine="auto")
+
+    assert reader.engine_used == "cpu"
+    assert reader.engine_fallback_reason == "cupy not installed"
     assert reader.acquisition_audit["microscope"] == "HT-SOLS"
     assert reader.xarray_dask_data.data.compute().any()
 

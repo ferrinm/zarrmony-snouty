@@ -18,6 +18,10 @@ turns the stamp off to reach the fallback deliberately.
 A plate acquisition is written by passing ``plate=PlateSpec(...)``. The
 grammar, the imaged wells, and the fields per well all come from that spec,
 and the sidecar and stamp writers are shared with the flat shapes.
+
+:func:`fake_device` is the other shared fixture here. It has nothing to do
+with the synthetic acquisition, and it lives in this file because the engine
+tests and the plate tests both need it (#43).
 """
 
 from __future__ import annotations
@@ -32,6 +36,7 @@ import numpy as np
 import pytest
 import tifffile
 
+from zarrmony_snouty import _deshear_gpu
 from zarrmony_snouty._metadata import TIMESTAMP_STRIP_PX
 from zarrmony_snouty._pco_timestamp import PCO_STAMP_PX
 
@@ -349,3 +354,38 @@ def assert_no_metadata_warnings(audit: dict) -> None:
 @pytest.fixture
 def synthetic_snouty(tmp_path: Path) -> SnoutyFixture:
     return write_synthetic_snouty(tmp_path)
+
+
+@pytest.fixture
+def fake_device(monkeypatch):
+    """Substitute the four leaves of :mod:`_deshear_gpu` that the engine
+    decision reads from the host.
+
+    The engine resolver reads two of them. ``cupy_available`` answers whether
+    the soft import succeeded, and ``free_device_bytes`` answers how much room
+    the card has. The engine audit reads the other two, ``cupy_version`` and
+    ``cuda_runtime_version``.
+
+    Those four are the whole host-dependent surface of the engine decision, so
+    fixing them makes both the resolved engine and the audit record a pure
+    function of the arguments below. Every branch of the decision table is
+    reachable from a CPU-only host, and a GPU host gives the same answer (#43).
+
+    The two version arguments default to ``None``, which is what both leaves
+    report when the cupy import failed. A test that asserts the audit on a
+    simulated host where the import succeeded must pass them.
+    """
+
+    def configure(
+        *,
+        cupy_available: bool,
+        free_bytes: int | None,
+        cupy_version: str | None = None,
+        cuda_runtime_version: str | None = None,
+    ) -> None:
+        monkeypatch.setattr(_deshear_gpu, "cupy_available", cupy_available)
+        monkeypatch.setattr(_deshear_gpu, "free_device_bytes", lambda: free_bytes)
+        monkeypatch.setattr(_deshear_gpu, "cupy_version", lambda: cupy_version)
+        monkeypatch.setattr(_deshear_gpu, "cuda_runtime_version", lambda: cuda_runtime_version)
+
+    return configure

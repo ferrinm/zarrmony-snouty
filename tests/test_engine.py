@@ -3,11 +3,13 @@
 *Mode* is the output geometry. *Engine* is where it computes. Only
 ``traditional`` has a GPU path (ADR-0002, decision 2).
 
-Most of these tests run on any host. The three facts that need hardware —
-whether cupy imported, how many bytes the device has free, and the device
-transform itself — are each one substitutable leaf in
-:mod:`zarrmony_snouty._deshear_gpu`, and :func:`fake_device` replaces them.
-The resolution logic under test is the same code a GPU host runs.
+Most of these tests run on any host. Every fact that needs hardware is one
+substitutable leaf in :mod:`zarrmony_snouty._deshear_gpu`: whether cupy
+imported, how many bytes the device has free, the two library versions the
+audit records, and the device transform itself. ``fake_device`` in
+``tests/conftest.py`` replaces the first four, and :func:`device_probe`
+replaces the last. The resolution logic under test is the same code a GPU
+host runs.
 
 The two smoke tests at the end are the exception. They need a real card and
 a real acquisition, and they skip everywhere else.
@@ -28,23 +30,6 @@ from zarrmony_snouty._errors import SnoutyEngineError
 from zarrmony_snouty._metadata import SnoutyMetadataError, parse_metadata_dir
 from zarrmony_snouty.adapter import SnoutyReader, SnoutyVolumesPerBufferUnsupportedError
 from zarrmony_snouty.session import SnoutySessionReader, SnoutySubdirSkippedWarning
-
-
-@pytest.fixture
-def fake_device(monkeypatch):
-    """Substitute the leaves of :mod:`_deshear_gpu` that need real hardware.
-
-    ``cupy_available`` answers whether the soft import succeeded, and
-    ``free_device_bytes`` answers how much room the card has. Nothing else in
-    the resolution path touches a device, so fixing these two makes every
-    branch of the decision table reachable from a CPU-only host.
-    """
-
-    def configure(*, cupy_available: bool, free_bytes: int | None) -> None:
-        monkeypatch.setattr(_deshear_gpu, "cupy_available", cupy_available)
-        monkeypatch.setattr(_deshear_gpu, "free_device_bytes", lambda: free_bytes)
-
-    return configure
 
 
 def test_unknown_engine_is_rejected(synthetic_snouty) -> None:
@@ -339,9 +324,37 @@ def test_open_session_reads_the_engine_from_the_env(
 # zarrmony's own documented audit vocabulary.
 
 
-def test_audit_records_a_fallback_and_the_reason_for_it(synthetic_snouty, fake_device) -> None:
+@pytest.mark.parametrize(
+    "simulate_a_gpu_host", [False, True], ids=["the_real_host", "a_simulated_gpu_host"]
+)
+def test_audit_records_a_fallback_and_the_reason_for_it(
+    synthetic_snouty, fake_device, monkeypatch, simulate_a_gpu_host
+) -> None:
+    """One expected dict, whatever the host underneath reports (#43).
+
+    The resolver reads two leaves and the audit reads two more. A fixture that
+    fixed only the resolver's two let the real host answer the audit's two, so
+    this test was green on a CPU-only host and red on a GPU host.
+
+    The second parameter makes all four leaves answer the way they answer on a
+    host with cupy and a card. :func:`fake_device` then overrides every one of
+    them, so the fallback produces the same record either way.
+
+    The four calls below set the leaves directly, and they must not go through
+    :func:`fake_device`. The fixture is the thing under test. A simulated host
+    built out of the fixture would lose whatever the fixture stopped fixing,
+    exactly as the override does, and the test would stay green through the
+    regression it exists to catch.
+    """
+    if simulate_a_gpu_host:
+        monkeypatch.setattr(_deshear_gpu, "cupy_available", True)
+        monkeypatch.setattr(_deshear_gpu, "free_device_bytes", lambda: 10**12)
+        monkeypatch.setattr(_deshear_gpu, "cupy_version", lambda: "14.2.0")
+        monkeypatch.setattr(_deshear_gpu, "cuda_runtime_version", lambda: "12.9")
+
     fake_device(cupy_available=False, free_bytes=None)
     reader = SnoutyReader(synthetic_snouty.dir, mode="traditional", engine="auto")
+
     assert reader.acquisition_audit["zarrmony_snouty"] == {
         "engine_used": "cpu",
         "engine_fallback_reason": "cupy not installed",
@@ -350,15 +363,20 @@ def test_audit_records_a_fallback_and_the_reason_for_it(synthetic_snouty, fake_d
     }
 
 
-def test_audit_records_the_device_library_versions(
-    synthetic_snouty, fake_device, monkeypatch
-) -> None:
+def test_audit_records_the_device_library_versions(synthetic_snouty, fake_device) -> None:
     """The versions describe the environment, not the outcome, so a reader
     can tell a cupy upgrade apart from a hardware change as the cause of a
-    pixel difference between two converts."""
-    fake_device(cupy_available=True, free_bytes=10**12)
-    monkeypatch.setattr(_deshear_gpu, "cupy_version", lambda: "13.4.1")
-    monkeypatch.setattr(_deshear_gpu, "cuda_runtime_version", lambda: "12.4")
+    pixel difference between two converts.
+
+    The other half of the claim the fallback test makes: the two version
+    arguments reach the audit, and the real host never does.
+    """
+    fake_device(
+        cupy_available=True,
+        free_bytes=10**12,
+        cupy_version="13.4.1",
+        cuda_runtime_version="12.4",
+    )
 
     reader = SnoutyReader(synthetic_snouty.dir, mode="traditional", engine="gpu")
 

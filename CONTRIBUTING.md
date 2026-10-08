@@ -48,7 +48,7 @@ that the value is tracked internally.
 ### The checker
 
 `scripts/check_no_internal_paths.py` blocks known share prefixes and
-identifier shapes. Two callers run it:
+identifier shapes. The repository wires two callers:
 
 - the pre-commit hook, over the staged files. Install hooks once with
   `uv run pre-commit install`.

@@ -102,13 +102,16 @@ _Avoid_: deskew, deskewed, deskewing — say *desheared* or *traditional*.
 ### Execution (v0.3 #7)
 
 **Engine**:
-The compute device a transform runs on — `cpu` or `gpu`. Chosen once when a reader opens an acquisition, never per timepoint. Only *traditional* has a GPU path.
-_Avoid_: backend, device, accelerator, mode (mode is the output geometry, engine is where it is computed).
+Where a transform computes — `cpu` or `gpu`. Chosen once when a reader opens an acquisition, never per timepoint. Only *traditional* has a GPU path.
+_Avoid_: backend, accelerator, mode (mode is the output geometry, engine is where it is computed). Avoid *device* for the engine too — see *Device* below.
 
 **Auto**:
 The default engine setting. Means "use the GPU if this host has one and the volume fits on it, otherwise the CPU". Not a third engine — it resolves to `cpu` or `gpu` before any pixel work starts.
 _Avoid_: default, best, hybrid.
 
+**Device**:
+The CUDA card itself, never the choice of where to compute. `required_device_bytes`, `free_device_bytes` and `_rotate_on_device` all use the word this way, and so does the fallback reason `"no CUDA device visible"`. The `fake_device` test fixture substitutes the leaves of `_deshear_gpu` that ask it.
+_Avoid_: device as another word for *engine*. The engine is the decision. The device is the hardware the `gpu` engine uses, and the `cpu` engine never touches it.
 ### Plugin interface (#42)
 
 **Reader kwarg**:

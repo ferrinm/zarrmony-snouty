@@ -22,11 +22,16 @@ and the sidecar and stamp writers are shared with the flat shapes.
 :func:`fake_device` is the other shared fixture here. It has nothing to do
 with the synthetic acquisition, and it lives in this file because the engine
 tests and the plate tests both need it (#43).
+
+:data:`REPO_ROOT` and :func:`tracked_files` are here for the same reason. The
+internal-path tests and the sdist tests both ask git for the tracked file
+list (#58, #59).
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +44,30 @@ import tifffile
 from zarrmony_snouty import _deshear_gpu
 from zarrmony_snouty._metadata import TIMESTAMP_STRIP_PX
 from zarrmony_snouty._pco_timestamp import PCO_STAMP_PX
+
+#: The repository root, derived from this file rather than from the cwd.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def tracked_files() -> list[Path]:
+    """Absolute paths of every file git tracks, or skip if there is no clone.
+
+    A staged deletion is dropped, so every path exists. An sdist built from a
+    copy of this list answers the same way on every host, and a tree scan
+    reaches the same files that the CI step reaches (#58, #59).
+    """
+    listing = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        pytest.skip("not a git checkout")
+    paths = [REPO_ROOT / name for name in listing.stdout.split("\0") if name]
+    return [path for path in paths if path.is_file()]
+
 
 #: Default name for a flat acquisition directory — the vendor GUI writes it.
 DEFAULT_SUBDIR_NAME = "2026-07-14_10-15-35_000_ht_sols_snap"

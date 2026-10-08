@@ -7,6 +7,55 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Internal
+
+- **The sdist ships an allow-list, so untracked state cannot reach a
+  distribution** (#58). `uv build` from a working tree wrote `.claude/` into
+  the sdist: `settings.local.json` and three complete copies of the
+  repository under `.claude/worktrees/`. hatchling keeps every file that a
+  VCS does not ignore. `.claude/` is untracked and is not in `.gitignore`,
+  and the old deny-list did not name it.
+  - PyPI was never affected. `.github/workflows/release.yml` builds from a
+    fresh `actions/checkout`, and the published 0.3.2 sdist holds no
+    `.claude` member. The content of the published sdist does not change.
+  - `[tool.hatch.build.targets.sdist]` now carries `include` instead of
+    `exclude`. A new untracked directory is out by default.
+  - Every pattern carries a leading `/`. hatchling reads them as gitignore
+    patterns, and an unanchored `src` matches a directory of that name at
+    any depth. Without the anchor, the worktree copies under `.claude/`
+    still shipped.
+  - `tests/test_sdist_contents.py` builds an sdist from a copy of the
+    tracked tree with `.claude/` and `.envrc` planted back in, then pins the
+    member list. The copy keeps the answer the same on a CI host, which has
+    no `.claude/`.
+  - `hatchling` joins the `dev` extra. The test builds in process, so it
+    needs no subprocess and no network. The build backend does not change.
+- **CI runs the internal-path checker, and the checker sees two more URL
+  shapes** (#59). Either gap let a private-repo link reach a public
+  repository.
+  - `.github/workflows/ci.yml` gains a `No internal paths` step that runs
+    `scripts/check_no_internal_paths.py` over `git ls-files`. Before this,
+    the checker ran as a pre-commit hook only. A contributor who clones and
+    pushes without `pre-commit install` gets no hook. That contributor can
+    land an internal path, and CI stays green.
+  - The two GitHub rules match the host more loosely and allow up to two
+    path segments before the owner. `raw.githubusercontent.com/<owner>/`
+    and `api.github.com/repos/<owner>/` passed, because the rules demanded
+    the literal `github.com` followed by one segment. The rule for the
+    internal org had the same gap. This change fixes both rules, and the
+    host now covers `github.dev` and `codeload.github.com` too.
+  - Two segments is the ceiling on purpose. An open count also matches a
+    name deep inside a path, so a link into this public repository fires on
+    any directory called `zarrmony` or `calico`. Both shapes are now
+    negative cases in the tests.
+  - The skip list for the three self-describing files moves from
+    `.pre-commit-config.yaml` into the checker, as `SELF_DESCRIBING`. The
+    hook and the CI step must agree about it.
+  - `tests/test_check_no_internal_paths.py` gains the new URL shapes, the
+    matching negative cases for this public repository, and a test that
+    scans every tracked file. `REPO_ROOT` and `tracked_files` move to
+    `tests/conftest.py`, because the sdist tests need them too.
+
 ## [0.3.2] — 2026-10-08
 
 Point release for #42. An unsupported `--reader-kwarg` raised an uncaught

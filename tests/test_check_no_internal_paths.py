@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.conftest import REPO_ROOT, tracked_files
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_no_internal_paths.py"
 _spec = importlib.util.spec_from_file_location("check_no_internal_paths", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -53,6 +55,30 @@ CAUGHT = [
         id="private-sibling-blaze",
     ),
     pytest.param("git@github.com:example-user/zarrmony.git", id="private-sibling-ssh"),
+    # The same claim through a host that is not literally `github.com`, and
+    # through a path with an extra segment in front of the owner (#59). Both
+    # are ordinary shapes: a README embeds a snippet over the raw host, and a
+    # script reads metadata over the API host.
+    pytest.param(
+        "https://raw.githubusercontent.com/example-user/zarrmony/main/docs/x.md",
+        id="private-sibling-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/example-user/zarrmony",
+        id="private-sibling-api-host",
+    ),
+    pytest.param(
+        "https://raw.githubusercontent.com/calico/example-repo/main/x.tf",
+        id="internal-org-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/calico/example-repo",
+        id="internal-org-api-host",
+    ),
+    pytest.param(
+        "open it in https://github.dev/example-user/zarrmony",
+        id="private-sibling-web-editor",
+    ),
 ]
 
 
@@ -84,6 +110,32 @@ ALLOWED = [
     ),
     pytest.param("Install it from https://pypi.org/project/zarrmony/.", id="pypi-project"),
     pytest.param("The plugin entry point group is `zarrmony.readers`.", id="dotted-name"),
+    # The looser host and the extra path segments must not cost the negative
+    # cases. This repo is public over every host, and the public org keeps
+    # its own name under the raw host too.
+    pytest.param(
+        "https://raw.githubusercontent.com/example-user/zarrmony-snouty/main/README.md",
+        id="this-repo-raw-host",
+    ),
+    pytest.param(
+        "https://api.github.com/repos/example-user/zarrmony-snouty",
+        id="this-repo-api-host",
+    ),
+    pytest.param(
+        "https://raw.githubusercontent.com/calicolabs/example-backend/main/x.py",
+        id="public-calicolabs-raw-host",
+    ),
+    # The owner slot is the only slot the rules read. A deep link into this
+    # public repository must survive a directory that shares a blocked name,
+    # because the path says nothing about who can read the repository.
+    pytest.param(
+        "https://github.com/example-user/zarrmony-snouty/tree/main/tests/zarrmony",
+        id="deep-link-with-a-zarrmony-directory",
+    ),
+    pytest.param(
+        "https://github.com/example-user/zarrmony-snouty/blob/main/src/calico/x.py",
+        id="deep-link-with-a-calico-directory",
+    ),
 ]
 
 
@@ -99,3 +151,37 @@ def test_allow_marker_suppresses_a_line(tmp_path: Path) -> None:
 
 def test_unscanned_suffixes_are_skipped(tmp_path: Path) -> None:
     assert scan_text(tmp_path, "/data/microscopy/export", name="notes.rst") == []
+
+
+# The checker, its tests and the convention doc quote the patterns they exist
+# to catch, so every rule fires on them. The skip list lives in the checker so
+# that CI and pre-commit agree about it (#59). Before that, only the
+# pre-commit config knew, and `check_no_internal_paths.py $(git ls-files)`
+# failed on a clean tree.
+def test_the_skip_list_names_the_three_self_describing_files() -> None:
+    assert check.SELF_DESCRIBING == {
+        Path("scripts/check_no_internal_paths.py"),
+        Path("tests/test_check_no_internal_paths.py"),
+        Path("CONTRIBUTING.md"),
+    }
+
+
+@pytest.mark.parametrize("relative", sorted(check.SELF_DESCRIBING), ids=str)
+def test_self_describing_files_are_skipped(relative: Path) -> None:
+    path = REPO_ROOT / relative
+    assert path.exists(), f"{relative} moved; update SELF_DESCRIBING in the checker"
+    assert check.scan(path, check.RULES) == []
+
+
+def test_the_tracked_tree_is_clean() -> None:
+    """Every tracked file passes. This is what the CI step asserts (#59).
+
+    The rules are ``RULES`` rather than ``load_rules()``. ``load_rules()``
+    adds ``.internal-patterns``, which is untracked and site-local, so a
+    test that read it would give a different answer on every host (#43).
+    CI has no ``.internal-patterns`` either, so the two agree there.
+    """
+    problems: list[str] = []
+    for path in tracked_files():
+        problems.extend(check.scan(path, check.RULES))
+    assert problems == []

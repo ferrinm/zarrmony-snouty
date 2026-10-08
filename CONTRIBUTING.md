@@ -45,14 +45,29 @@ Where a runbook genuinely needs a real path to be executable, take it from an
 environment variable set by the person running it, and say in the document
 that the value is tracked internally.
 
-### The pre-commit hook
+### The checker
 
-`scripts/check_no_internal_paths.py` runs as a pre-commit hook and blocks known
-share prefixes and identifier shapes. Install hooks once with:
+`scripts/check_no_internal_paths.py` blocks known share prefixes and
+identifier shapes. The repository wires two callers:
+
+- the pre-commit hook, over the staged files. Install hooks once with
+  `uv run pre-commit install`.
+- the `No internal paths` step in `.github/workflows/ci.yml`, over every
+  tracked file.
+
+The CI step is the binding one. A contributor who clones and pushes without
+`pre-commit install` has no hook, so the hook alone makes every rule advisory.
+
+To run the checker by hand over the whole tree:
 
 ```bash
-uv run pre-commit install
+git ls-files -z | xargs -0 uv run python scripts/check_no_internal_paths.py
 ```
+
+The checker, its tests and this document all quote the patterns they exist to
+catch, so every rule fires on them. The checker skips those three files. The
+list is `SELF_DESCRIBING` in `scripts/check_no_internal_paths.py`, and it is
+there rather than in the hook config so that both callers read the same list.
 
 The patterns committed to the repo are deliberately **structural** — the shape
 of an internal mount (`/Volumes/<share>-ro`), a cluster path, a trial number, a

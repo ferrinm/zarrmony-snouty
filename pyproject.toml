@@ -65,6 +65,10 @@ dev = [
     # the CLI (#42). zarrmony pulls click in too, but the tests import it
     # directly, so it is declared directly.
     "click>=8",
+    # tests/test_sdist_contents.py builds an sdist in process and reads the
+    # member list (#58). hatchling is already the build backend, so this
+    # pins no new tool — it only puts the backend in the test environment.
+    "hatchling>=1.27",
 ]
 
 [project.urls]
@@ -80,12 +84,43 @@ build-backend = "hatchling.build"
 packages = ["src/zarrmony_snouty"]
 
 [tool.hatch.build.targets.sdist]
-# Keep documentation out of the published sdist. The docs describe internal
-# consumers from time to time, and a distribution is the hardest place to
-# retract a file from. `.out-of-scope` is triage knowledge for the same
-# reason: it records why a request was refused, which is a maintainer note
-# rather than something a downstream installer needs.
-exclude = ["docs", ".out-of-scope"]
+# An allow-list, not a deny-list (#58). hatchling keeps every file a VCS does
+# not ignore, and a working tree holds untracked state that `.gitignore` does
+# not name — `.claude/` with session settings and whole worktree copies,
+# `.envrc`. A deny-list ships each of those until somebody notices, and a
+# distribution is the hardest place to retract a file from. Under an
+# allow-list, a new untracked directory is out by default.
+#
+# The list reproduces the published 0.3.2 sdist. Two things stay out on
+# purpose. `docs` describes internal consumers from time to time.
+# `.out-of-scope` is triage knowledge: it records why a request was refused,
+# which is a maintainer note rather than something a downstream installer
+# needs.
+#
+# Every pattern is anchored with a leading `/`. hatchling reads these as
+# gitignore patterns, and an unanchored `src` matches a directory of that
+# name at any depth. A worktree under `.claude/` has its own `src`, `tests`
+# and `pyproject.toml`, so an unanchored list ships the whole copy and
+# defeats the point of the allow-list.
+#
+# `tests/test_sdist_contents.py` pins the result. Change the list and that
+# test together.
+include = [
+    "/src",
+    "/tests",
+    "/scripts",
+    "/.github",
+    "/.gitignore",
+    "/.pre-commit-config.yaml",
+    "/CHANGELOG.md",
+    "/CLAUDE.md",
+    "/CONTEXT.md",
+    "/CONTRIBUTING.md",
+    "/LICENSE",
+    "/README.md",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [tool.ruff]
 line-length = 100

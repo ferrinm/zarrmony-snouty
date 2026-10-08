@@ -22,6 +22,39 @@ from pathlib import Path
 
 ALLOW_MARKER = "allow-internal-path"
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# These three files quote the patterns they exist to catch, so the rules below
+# fire on them. The list lives here rather than in `.pre-commit-config.yaml`
+# because two callers need it: the hook, and the CI step that runs the checker
+# over `git ls-files` (#59). Before this, only the hook knew, so a tree scan
+# failed on a clean tree.
+SELF_DESCRIBING = frozenset(
+    {
+        Path("scripts/check_no_internal_paths.py"),
+        Path("tests/test_check_no_internal_paths.py"),
+        Path("CONTRIBUTING.md"),
+    }
+)
+
+# The hosts that serve a GitHub repository. `github.com` covers the web UI,
+# the SSH remote, `api.github.com` and `codeload.github.com`. `github.dev`
+# covers the web editor, and `githubusercontent.com` covers
+# `raw.githubusercontent.com`. A rule that demanded the literal `github.com`
+# missed the raw host, which is the normal way a README embeds a snippet from
+# another repository (#59).
+GITHUB_HOST = r"github(?:usercontent\.com|\.com|\.dev)[/:]"
+
+# Path segments between the host and the owner or repository name. There are
+# none on the raw host (`raw.githubusercontent.com/<owner>/`), one on the web
+# host (`github.com/<owner>/`), and two on the API host
+# (`api.github.com/repos/<owner>/`). Two is the ceiling on purpose. An open
+# count also matches a name deep inside a path, so a link into this public
+# repository fires on any directory called `zarrmony` or `calico`, and
+# CONTRIBUTING.md says that a rule which fires on ordinary text gets
+# suppressed until it protects nothing.
+PATH_SEGMENTS = r"(?:[A-Za-z0-9_.-]+/){0,2}"
+
 # Patterns kept here are *structural* — they describe the shape of an internal
 # path, never the name of a specific lab, collaborator or study. A blocklist
 # naming the things it protects would publish them itself, which is exactly the
@@ -48,7 +81,7 @@ RULES: list[tuple[re.Pattern[str], str]] = [
         # company name is already public in LICENSE, and the README links the
         # separate public `calicolabs` org. What leaks is the repo under it, so
         # the trailing slash is required — it keeps `calicolabs/` from matching.
-        re.compile(r"github\.com[/:]calico/", re.IGNORECASE),
+        re.compile(GITHUB_HOST + PATH_SEGMENTS + r"calico/", re.IGNORECASE),
         "link into the internal GitHub org; name the file, drop the URL",
     ),
     (
@@ -66,7 +99,7 @@ RULES: list[tuple[re.Pattern[str], str]] = [
         # The negative lookahead keeps `zarrmony-snouty` out. That repo is
         # genuinely public and links to it are correct.
         re.compile(
-            r"github\.com[/:][A-Za-z0-9_.-]+/zarrmony(?:-blaze)?(?![\w-])",
+            GITHUB_HOST + PATH_SEGMENTS + r"zarrmony(?:-blaze)?(?![\w-])",
             re.IGNORECASE,
         ),
         "link to a private sibling repo; name the file, or link the PyPI project",
@@ -134,9 +167,20 @@ SCANNED_SUFFIXES = {
 }
 
 
+def is_self_describing(path: Path) -> bool:
+    """True if ``path`` is one of the files that quote the rules themselves."""
+    try:
+        relative = path.resolve().relative_to(REPO_ROOT)
+    except (OSError, ValueError):
+        return False
+    return relative in SELF_DESCRIBING
+
+
 def scan(path: Path, rules: list[tuple[re.Pattern[str], str]]) -> list[str]:
     """Return one message per offending line in ``path``."""
     if path.suffix.lower() not in SCANNED_SUFFIXES:
+        return []
+    if is_self_describing(path):
         return []
     try:
         text = path.read_text(encoding="utf-8")

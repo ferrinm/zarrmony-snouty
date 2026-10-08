@@ -111,6 +111,10 @@ imaged field. Every field image is `(T, C, Z, Y, X)`, the same shape the flat
 reader writes. `mode` and `engine` work exactly as they do above, through the
 same two environment variables.
 
+A plate convert runs for hours or days, and an interrupted one leaves nothing
+readable. Size it before you submit it. See
+[Sizing a long convert](#sizing-a-long-convert).
+
 A plate acquisition comes from a python script that an operator edits, not
 from the vendor GUI, so the directory name is free text. **The matcher
 therefore reads the contents and never the name.** It fires when `data/` and
@@ -360,6 +364,8 @@ and fill in your own partition and account:
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 # Add your own --partition and --account here.
+# Set --time from the scene count, not from the input size. See
+# "Sizing a long convert" below.
 
 export ZARRMONY_SNOUTY_MODE=traditional
 export ZARRMONY_SNOUTY_ENGINE=auto
@@ -407,6 +413,48 @@ Two places hold it:
 For a `traditional` job that must run on the device, set
 `ZARRMONY_SNOUTY_ENGINE=gpu` instead. A bad node then raises a
 `SnoutyEngineError` in seconds, before any pixel work.
+
+#### Sizing a long convert
+
+Ask for wall time by **scene count**, not by input bytes. One scene is one
+field of one well on a plate, and one position on a flat acquisition. Bytes
+per scene vary with the volume geometry, so a byte total predicts the clock
+badly.
+
+Measured on plate converts, one TITAN RTX, `traditional` mode, 16 cores,
+64 GiB, input on a network share (#44):
+
+| plate | scenes per minute |
+| --- | --- |
+| 20 wells, 1 field per well, 3 channels | 0.54 |
+| 384 wells, 9 fields per well, 4 channels | 0.45 |
+
+Use **0.45 scenes per minute** to size a plate. A 384-well plate with 9 fields
+per well holds 3456 scenes, so it needs 125 to 135 hours. Two jobs in #44 died
+on a time limit because the plan sized that plate from its 1.6 TiB instead.
+
+Both rates come from plates. One large scene costs more than one plate field:
+the flat acquisition measured in #44 converted a single 1.8 GiB scene in
+200 s, which is 0.30 scenes per minute. Measure your own rate before a
+multi-day job. Start the convert, count the finished scene directories under
+the output store after an hour, and divide.
+
+**A plate convert is all-or-nothing.** zarrmony writes the plate audit once,
+after the last field. A job that the scheduler kills at the wall leaves a
+partial store with no audit. No tool can read that store, and no later run can
+continue it. `zarrmony convert` has `--force` and no resume flag, so a
+resubmit starts from zero.
+
+A flat or session convert does not lose its finished work. It writes one store
+per scene and writes each audit as that scene ends. An interrupted run keeps
+every scene that finished.
+
+Two rules follow for a plate:
+
+- Ask for more time than the estimate, not less. A job that ends early costs
+  nothing. A job that ends at the wall costs everything.
+- Do not plan to extend a running job. `scontrol update` refuses a normal
+  user.
 
 ### Host memory for the transform modes
 
@@ -544,6 +592,11 @@ See Limitations for the remaining unsupported shape.
   plate** above.
 - **A plate carries one acquisition.** The OME-NGFF plate writer accepts at
   most one, so a plate imaged in two passes is out of scope.
+- **An interrupted plate convert leaves nothing.** zarrmony writes the plate
+  audit after the last field, and `zarrmony convert` has no resume flag, so a
+  killed job loses every field it wrote. A large plate runs for days, which
+  makes this the main scale risk. See **Sizing a long convert** above. The
+  missing resume is tracked upstream.
 - **Fields are never stitched.** Each field of a well becomes a separate
   image inside the well group. The vendor calls a field a "tile", which
   promises a mosaic; this reader builds none.

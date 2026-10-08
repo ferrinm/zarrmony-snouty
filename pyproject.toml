@@ -18,9 +18,19 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Image Processing",
 ]
 dependencies = [
-    # 0.9.0 is the floor for the HCS plate API (PlateLayout, PlateField,
+    # 0.9.0 was the floor for the HCS plate API (PlateLayout, PlateField,
     # Acquisition) that the plate reader populates.
-    "zarrmony>=0.9.0",
+    #
+    # 0.15.0 is the floor now, because that release added
+    # ``zarrmony.errors.ReaderKwargError``. Every plugin ``open`` here raises
+    # a subclass of it to reject a reader kwarg (#42), and the import is at
+    # module scope, so an older zarrmony cannot import this package.
+    #
+    # Nothing is lost below 0.15.0. ``reader_kwargs`` forwarding arrived in
+    # 0.13.0, so 0.9.0 through 0.12.0 could never reach the plugin ``open``
+    # with a reader kwarg at all. 0.13.0 and 0.14.0 could, and had no error
+    # type the CLI turns into a message.
+    "zarrmony>=0.15.0",
     # The reader builds the OME object zarrmony reads per scene (#39).
     # zarrmony pulls ome-types in too, but this package imports it directly,
     # so it declares it directly.
@@ -29,8 +39,8 @@ dependencies = [
     # this reader is tested against. No older release was tested, so the
     # floor claims nothing about one.
     #
-    # The zarrmony floor stays at 0.9.0 on purpose. 0.9.0 never reads
-    # ``ome_metadata``, and an unused property is harmless there.
+    # The zarrmony floor stays below 0.18.1 on purpose. Only 0.18.1 reads
+    # ``ome_metadata``, and an unused property is harmless on anything older.
     "ome-types>=0.6.3",
     "tifffile>=2024.0",
     "dask>=2026.3.0",
@@ -50,6 +60,11 @@ dev = [
     "pytest-cov>=7",
     "ruff>=0.14",
     "pre-commit>=4",
+    # tests/test_reader_kwargs.py drives the real `zarrmony convert` CLI
+    # through click's CliRunner, because the error type only pays off inside
+    # the CLI (#42). zarrmony pulls click in too, but the tests import it
+    # directly, so it is declared directly.
+    "click>=8",
 ]
 
 [project.urls]
@@ -67,8 +82,10 @@ packages = ["src/zarrmony_snouty"]
 [tool.hatch.build.targets.sdist]
 # Keep documentation out of the published sdist. The docs describe internal
 # consumers from time to time, and a distribution is the hardest place to
-# retract a file from.
-exclude = ["docs"]
+# retract a file from. `.out-of-scope` is triage knowledge for the same
+# reason: it records why a request was refused, which is a maintainer note
+# rather than something a downstream installer needs.
+exclude = ["docs", ".out-of-scope"]
 
 [tool.ruff]
 line-length = 100

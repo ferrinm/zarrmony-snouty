@@ -112,3 +112,8 @@ _Avoid_: default, best, hybrid.
 **Device**:
 The CUDA card itself, never the choice of where to compute. `required_device_bytes`, `free_device_bytes` and `_rotate_on_device` all use the word this way, and so does the fallback reason `"no CUDA device visible"`. The `fake_device` test fixture substitutes the leaves of `_deshear_gpu` that ask it.
 _Avoid_: device as another word for *engine*. The engine is the decision. The device is the hardware the `gpu` engine uses, and the `cpu` engine never touches it.
+### Plugin interface (#42)
+
+**Reader kwarg**:
+A `KEY=VALUE` pair that zarrmony forwards from `--reader-kwarg` to the winning plugin's `open`. These readers accept none and reject every one with `SnoutyReaderKwargError`. *Mode*, *engine* and the host-memory budget are environment variables, never reader kwargs.
+_Avoid_: reader keyword, reader option, reader argument, open kwarg.

@@ -54,6 +54,7 @@ from ._errors import (
     SnoutyDataError,
     SnoutyError,
     SnoutyModeError,
+    SnoutyReaderKwargError,
     SnoutyVolumesPerBufferUnsupportedError,
 )
 from ._hostmem import SnoutyHostMemoryError
@@ -83,6 +84,7 @@ __all__ = [
     "SnoutyHostMemoryError",
     "SnoutyModeError",
     "SnoutyReader",
+    "SnoutyReaderKwargError",
     "SnoutyTimestampWarning",
     "SnoutyVolumesPerBufferUnsupportedError",
     "SnoutyXYPositionListError",

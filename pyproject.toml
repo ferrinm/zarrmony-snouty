@@ -1,6 +1,6 @@
 [project]
 name = "zarrmony-snouty"
-version = "0.3.0"
+version = "0.3.1"
 description = "Snouty (AndrewGYork single-objective light-sheet) reader plugin for zarrmony."
 readme = "README.md"
 requires-python = ">=3.13"

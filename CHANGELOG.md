@@ -7,6 +7,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-10-07
+
+Point release for #39. Every convert on 0.3.0 warned once per scene and wrote
+that warning into the store. Upgrade from 0.3.0.
+
+The two releases carry the same reader behavior otherwise. Pixel data is
+unchanged, and a store written by 0.3.0 needs no reconversion unless you want
+the two audit fields that 0.3.0 dropped.
+
 ### Added
 
 - **Every Snouty reader now exposes `ome_metadata`** (#39). zarrmony 0.18.1

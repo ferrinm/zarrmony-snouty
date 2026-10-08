@@ -7,6 +7,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-10-08
+
+Point release for #42. An unsupported `--reader-kwarg` raised an uncaught
+`TypeError` on 0.3.1 and wrote no store. It now fails with one sentence.
+
+The release also raises the `zarrmony` floor to 0.15.0, fixes two tests that
+only failed on a GPU host (#43), and adds two runbook sections for a long
+convert on a GPU node (#47, #52).
+
+Pixel data is unchanged. A store written by this release matches one written
+by 0.3.1 byte for byte, apart from the conversion timestamps and the output
+path in the audit. No reconversion is needed.
+
 ### Fixed
 
 - **An unsupported `--reader-kwarg` now fails with one sentence, not a stack
@@ -69,6 +82,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     resume flag. It states that a flat or session convert keeps every scene
     that finished, because that path writes each audit inside the scene loop.
   - A matching limitation entry records the all-or-nothing plate convert.
+
+### Internal
+
+- **The engine tests now give the same answer on every host** (#43, from the
+  field report in #44). Two tests passed on a CPU-only host and failed on a
+  GPU host. The product was right in both cases, so both failures were test
+  defects. No file under `src/` changed.
+  - The `fake_device` fixture moves to `tests/conftest.py`, because the
+    engine tests and the plate tests both need it. It fixes all four
+    host-dependent leaves of `_deshear_gpu` now: `cupy_available`,
+    `free_device_bytes`, `cupy_version` and `cuda_runtime_version`. It fixed
+    the first two only, so the real versions leaked into the audit on a GPU
+    host.
+  - `test_audit_records_a_fallback_and_the_reason_for_it` runs twice. The
+    second parameter makes the leaves answer the way a GPU host answers, and
+    the expected audit does not change.
+  - `test_the_cpu_engines_run` drops `auto`, which resolves to the GPU on a
+    host with a card. `auto` gets its own plate test, and that test fixes
+    the device leaves rather than trusting the host.
+- **The `CONTEXT.md` glossary separates the two senses of "device"** (#43).
+  The Engine entry banned "device" as a synonym and then used the word in
+  its own definition. Engine now reads "where a transform computes", and a
+  new Device entry defines the hardware sense.
+- **`scripts/check_no_internal_paths.py` blocks a private sibling repository
+  link in both owner spellings** (#48). The blocklist named one owner only,
+  so the other spelling of the same private URL passed.
 
 ### Known limitations
 

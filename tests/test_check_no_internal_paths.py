@@ -40,6 +40,19 @@ CAUGHT = [
         id="internal-org-url",
     ),
     pytest.param("git@github.com:calico/example-repo.git", id="internal-org-ssh"),
+    pytest.param(
+        "see https://github.com/example-user/zarrmony for the guide",
+        id="private-sibling-via-redirect",
+    ),
+    pytest.param(
+        "https://github.com/example-user/zarrmony/blob/main/docs/x.md",
+        id="private-sibling-deep-link",
+    ),
+    pytest.param(
+        "mirrors https://github.com/example-user/zarrmony-blaze/issues/1",
+        id="private-sibling-blaze",
+    ),
+    pytest.param("git@github.com:example-user/zarrmony.git", id="private-sibling-ssh"),
 ]
 
 
@@ -65,6 +78,12 @@ ALLOWED = [
         id="bare-internal-repo-path",
     ),
     pytest.param("Reviewers are `@calico/sweng-dev`.", id="codeowners-team"),
+    pytest.param(
+        "https://github.com/example-user/zarrmony-snouty/blob/main/README.md",
+        id="this-repo-is-public",
+    ),
+    pytest.param("Install it from https://pypi.org/project/zarrmony/.", id="pypi-project"),
+    pytest.param("The plugin entry point group is `zarrmony.readers`.", id="dotted-name"),
 ]
 
 

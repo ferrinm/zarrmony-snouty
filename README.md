@@ -1,7 +1,7 @@
 # zarrmony-snouty
 
 Snouty (single-objective light-sheet, "SOLS") reader plugin for
-[zarrmony](https://github.com/ferrinm/zarrmony). Detects a single Snouty
+[zarrmony](https://pypi.org/project/zarrmony/). Detects a single Snouty
 acquisition directory, a session directory holding several of them, or a
 multiwell-plate acquisition. Converts the raw skewed volumes to OME-NGFF 0.5:
 
@@ -511,9 +511,9 @@ metadata is a bespoke key=value plaintext file, not OME-XML. The raw pixel
 data is a plain multi-slice TIFF but the geometry (55° light-sheet tilt,
 scan-shear along Y) requires a plugin that understands the sidecar to expose
 correct pixel sizes and to deshear into orthogonal views. See
-[ADR-0001](docs/adr/0001-tifffile-over-bioio.md) for the rationale and the
-[reader-plugin authoring guide](https://github.com/ferrinm/zarrmony/blob/main/docs/writing-a-reader-plugin.md)
-for how to build your own plugin.
+[ADR-0001](docs/adr/0001-tifffile-over-bioio.md) for the rationale. To build
+your own plugin, read `docs/writing-a-reader-plugin.md` in the zarrmony
+repository.
 
 ## License
 

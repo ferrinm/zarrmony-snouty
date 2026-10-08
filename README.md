@@ -366,6 +366,48 @@ export ZARRMONY_SNOUTY_ENGINE=auto
 zarrmony convert /mnt/readonly/<dataset>/…_ht_sols_gui ./out
 ```
 
+**Check the device at the start of a long job.** A node can hand out a device
+that answers no CUDA call at all. Run this inside the allocation, before the
+convert:
+
+```bash
+uv run --no-project --with cupy-cuda12x \
+  python -c 'import cupy.cuda.runtime as r; print(r.getDeviceCount())'
+```
+
+Match the wheel to the CUDA runtime on the node, as in
+[Installing cupy](#installing-cupy). A count of 1 or more means that CUDA
+answers. On a bad node, the check fails with this error:
+
+```
+cupy_backends.cuda.api.runtime.CUDARuntimeError: cudaErrorUnknown: unknown error
+```
+
+If the check fails, ask the scheduler for a different node. The fault covers
+the whole node, not one device, and no setting in this package avoids it.
+
+**Do not use `nvidia-smi` as this check.** `nvidia-smi` reports a healthy
+device, free memory and a driver version on a node where every CUDA call
+fails. Measured on two nodes in #44.
+
+**`auto` never treats a dead device as an error.** On a node with a dead
+device, an `auto` convert falls back to the CPU, writes a correct store, and
+takes far longer. Nothing in the output stream says so. See
+[How `auto` and `gpu` differ](#how-auto-and-gpu-differ) for the full rule.
+
+After an `auto` convert, read the recorded engine before you trust the timing.
+Two places hold it:
+
+- The `zarrmony_snouty` block in the acquisition audit of the output store.
+  That block is the one a CLI convert leaves behind. It is shown under
+  [The two engines do not write identical pixels](#the-two-engines-do-not-write-identical-pixels).
+- `reader.engine_used` and `reader.engine_fallback_reason`, for a caller that
+  holds the reader object.
+
+For a `traditional` job that must run on the device, set
+`ZARRMONY_SNOUTY_ENGINE=gpu` instead. A bad node then raises a
+`SnoutyEngineError` in seconds, before any pixel work.
+
 ### Host memory for the transform modes
 
 The reader builds one dask task per timepoint, and each task transforms a

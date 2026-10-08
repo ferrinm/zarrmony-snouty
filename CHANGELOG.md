@@ -39,6 +39,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   arrived in zarrmony 0.13.0, so 0.9.0 through 0.12.0 could never reach a
   plugin `open` with a reader kwarg at all.
 
+### Documentation
+
+- **The GPU-node runbook now covers a node whose device is dead** (#47, from
+  the field report in #44). The "Running on a GPU node" section of
+  `README.md` gave a submit script with `ZARRMONY_SNOUTY_ENGINE=auto` and
+  stopped there. Nothing told the user how to tell a GPU convert from a
+  silent CPU fallback. No source changed.
+  - The section now gives a device check that calls `getDeviceCount()`
+    inside the allocation, before a long job. It states that `nvidia-smi` is
+    not a substitute, because `nvidia-smi` passes on a node where every CUDA
+    call fails.
+  - It warns that `auto` never treats a dead device as an error, and it asks
+    the user to read the recorded engine before they trust the timing. The
+    text points at the existing `engine_used` attribute and at the existing
+    `zarrmony_snouty` audit block. No new field.
+
 ### Known limitations
 
 - zarrmony prints a `TileAlignmentWarning` on every Snouty convert that

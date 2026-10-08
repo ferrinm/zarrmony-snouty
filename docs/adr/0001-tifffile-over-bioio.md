@@ -28,8 +28,9 @@ wrapped in `dask.delayed` so `open()` stays cheap. Do not depend on any bioio
 sub-package, and do not attempt to synthesise OME-XML from the sidecar just to
 route through `bioio-ome-tiff`.
 
-This mirrors [zarrmony-blaze's ADR-0001](https://github.com/ferrinm/zarrmony-blaze/blob/main/docs/adr/0001-tifffile-over-bioio-ome-tiff.md)
-(also `tifffile` + a hand-parser), but for a different reason: blaze rejects
+This mirrors zarrmony-blaze's ADR-0001
+(`docs/adr/0001-tifffile-over-bioio-ome-tiff.md` in that repository, also
+`tifffile` + a hand-parser), but for a different reason: blaze rejects
 bioio because the vendor's real OME-XML is malformed; snouty rejects it
 because there is no OME-XML at all.
 
@@ -75,4 +76,5 @@ because there is no OME-XML at all.
   Snouty→OME-TIFF converter. `SnoutyMetadata` is a direct port of its
   `_load_metadata`; the timestamp-strip cropping and the choice of
   `sample_px_um`/`scan_step_size_um` for pixel sizes both originate there.
-- [zarrmony ADR-0001: reader plugin architecture](https://github.com/ferrinm/zarrmony/blob/main/docs/adr/0001-reader-plugin-architecture.md)
+- zarrmony ADR-0001: reader plugin architecture
+  (`docs/adr/0001-reader-plugin-architecture.md` in the zarrmony repository)

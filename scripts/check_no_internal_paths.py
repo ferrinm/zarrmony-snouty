@@ -52,6 +52,26 @@ RULES: list[tuple[re.Pattern[str], str]] = [
         "link into the internal GitHub org; name the file, drop the URL",
     ),
     (
+        # The same leak through the other spelling. `calico/zarrmony` and
+        # `calico/zarrmony-blaze` are private, and GitHub redirects a personal
+        # fork path onto them, so a `<user>/zarrmony` link reads as public and
+        # resolves to an internal repo. The rule keys on the repo name rather
+        # than the owner for that reason.
+        #
+        # Naming them here publishes nothing: both are public PyPI packages,
+        # and `zarrmony` is this package's own dependency in pyproject.toml.
+        # What the URL adds is the claim that a repo by that name is readable,
+        # which is false for every reader outside the org.
+        #
+        # The negative lookahead keeps `zarrmony-snouty` out. That repo is
+        # genuinely public and links to it are correct.
+        re.compile(
+            r"github\.com[/:][A-Za-z0-9_.-]+/zarrmony(?:-blaze)?(?![\w-])",
+            re.IGNORECASE,
+        ),
+        "link to a private sibling repo; name the file, or link the PyPI project",
+    ),
+    (
         # Slide-scanner scene names: a magnification bolted straight onto the
         # filter panel and an acquisition index, `20x_A_B_C_01`. Structural,
         # not a blocklist — what it keys on is the `<mag>x_` prefix followed by

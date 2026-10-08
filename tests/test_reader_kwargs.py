@@ -73,12 +73,20 @@ ENTRY_POINTS = [
 
 
 @pytest.mark.parametrize("entry", ENTRY_POINTS)
-def test_opens_with_no_reader_kwargs(entry: EntryPoint, tmp_path: Path) -> None:
+def test_opens_with_no_reader_kwargs(entry: EntryPoint, tmp_path: Path, monkeypatch) -> None:
     """The control. A convert that passes no reader kwarg is untouched.
 
     The shim must contribute nothing of its own, so the reader it returns has
     to match one built straight from the reader class with the same defaults.
+
+    ``direct`` pins the mode and the engine, and the shim reads both out of
+    the environment. Clear the two variables, or this test compares two
+    different configurations and reports the difference as a defect (#56).
+    ``ZARRMONY_SNOUTY_MODE=traditional`` is the case that bites, because the
+    GPU-node runbook in ``README.md`` tells the user to export it.
     """
+    monkeypatch.delenv("ZARRMONY_SNOUTY_MODE", raising=False)
+    monkeypatch.delenv("ZARRMONY_SNOUTY_ENGINE", raising=False)
     path = entry.make_input(tmp_path)
     reader_class = getattr(zarrmony_snouty, entry.reader_attr)
     direct = reader_class(path, mode=DEFAULT_MODE, engine="auto")

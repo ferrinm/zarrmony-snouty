@@ -5,7 +5,30 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] — 2026-10-08
+
+First stable release. No file under `src/` changed since 0.3.2, so the reader
+behavior, the CLI surface and the store layout are the ones that 0.3.2
+shipped. A store written by this release matches one written by 0.3.2 byte
+for byte, apart from the conversion timestamps and the output path in the
+audit. No reconversion is needed.
+
+The version marks the API as settled, not as new work. The three reader entry
+points, the two environment variables and the audit block are now under
+Semantic Versioning: a breaking change to any of them needs 2.0.0.
+
+The release collects the packaging and test work that landed after 0.3.2. The
+sdist builds from an allow-list (#58), CI runs the internal-path checker
+(#59), and one test no longer reads the real environment (#56).
+
+### Changed
+
+- **The `Development Status` classifier reads `5 - Production/Stable`.** The
+  package shipped as `3 - Alpha` through 0.3.2. Cluster runs on real data now
+  cover the per-scene, session and plate paths, the suite is green on GPU
+  hardware (#43), and the store layout did not change across 0.3.0 to 1.0.0.
+  The classifier is the only field in `pyproject.toml` that this release
+  changes for an installer.
 
 ### Internal
 
@@ -55,6 +78,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     matching negative cases for this public repository, and a test that
     scans every tracked file. `REPO_ROOT` and `tracked_files` move to
     `tests/conftest.py`, because the sdist tests need them too.
+- **The reader-kwarg control test no longer reads the real environment**
+  (#56). `test_opens_with_no_reader_kwargs` builds one reader with pinned
+  arguments and one through the shim, then asserts that the two match. The
+  shim reads `ZARRMONY_SNOUTY_MODE` and `ZARRMONY_SNOUTY_ENGINE` out of the
+  environment, and the test cleared neither. No file under `src/` changed.
+  - With `ZARRMONY_SNOUTY_MODE=traditional` exported, the shim returned the
+    rotated volume and the pinned reader returned the desheared one. All
+    three parameters then failed on the shape assertion.
+  - The GPU-node runbook in `README.md` tells the user to export that
+    variable, so the suite failed in the shell the runbook creates.
+  - The test clears both variables with `monkeypatch.delenv` now. This is
+    the defect class that #43 closed, and it arrived in the same release
+    through #42. Both shipped in 0.3.2.
+
+### Known limitations
+
+- **A 3456-scene plate convert is unverified end to end.** The plate layout,
+  the three plate checks and validation are proved on real data at a smaller
+  scene count. Two questions stay open at full scale: does a 1.6 TiB,
+  3456-scene convert finish, and does `auto` hold one engine across it.
+  Issue #54 tracks both. At the measured rate of 0.45 fields per minute,
+  such a convert needs 125 to 135 hours.
+- **An interrupted plate convert loses every field it wrote.** zarrmony
+  writes the plate audit after the last field, and `zarrmony convert` has no
+  resume flag. A plate that runs for days therefore has no safe interruption
+  point. Nothing in this repository can change that. The missing resume is
+  tracked upstream. A flat or session convert is unaffected.
+- zarrmony prints a `TileAlignmentWarning` on every Snouty convert that
+  advises `--reader-kwarg tile_size=...`. These readers cannot honour it.
+  The hint is not plugin-aware, and nothing in this repository can suppress
+  it. Lateral tile control was considered and refused (#45). The warning is
+  tracked upstream.
 
 ## [0.3.2] — 2026-10-08
 

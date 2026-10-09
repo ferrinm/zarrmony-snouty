@@ -1,6 +1,6 @@
 [project]
 name = "zarrmony-snouty"
-version = "0.3.2"
+version = "1.0.0"
 description = "Snouty (AndrewGYork single-objective light-sheet) reader plugin for zarrmony."
 readme = "README.md"
 requires-python = ">=3.13"
@@ -8,7 +8,7 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Max Ferrin", email = "ferrin@calicolabs.com" }]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",

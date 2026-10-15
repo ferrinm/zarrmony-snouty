@@ -5,6 +5,53 @@ All notable changes to this project will be documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **"Sizing a long convert" now sizes from a complete plate run** (#62, from
+  the result in #54). The section sized a 3456-scene plate at 0.45 scenes per
+  minute and 125 to 135 hours. The rate came from three short windows inside
+  two jobs that died on a time limit, and the hour band was computed from it,
+  because neither job finished. The one run that has now finished took
+  138.5 hours at a whole-run mean of 0.42, so the published rate was too high
+  and the published band was too low. No source changed.
+  - The section sizes a plate at **0.40 scenes per minute**, which gives
+    144 hours for 3456 scenes, and it says to round a measured rate down. The
+    whole-run mean of 0.42 is reported but not recommended, because 0.42
+    predicts 137 hours for the very run that took 138.5.
+  - The rate table carries the scene count and the convert duration behind
+    each rate, so each row reproduces its own arithmetic. The 20-well row
+    reads 37 min, which is the duration that run reported. The earlier text
+    said 38 minutes, which is the job elapsed and does not give 0.54.
+  - A new paragraph records the shape of the slowdown. The rate held between
+    0.42 and 0.45 scenes per minute for the first 88 percent of the clock,
+    then fell to 0.27 over the final 16 hours. The heartbeat rates in the job
+    log are cumulative means, so the end-of-run figure of 0.416 is the
+    whole-run mean and not the terminal rate.
+  - The "measure your own rate" advice now asks the reader to cut the measured
+    rate by 15 percent. The first 30 minutes of the complete run gave 0.467
+    and predicted 123 hours. Cut by 15 percent it gives 0.397 and 145 hours,
+    which covers the 142.2 hours the job used.
+  - A new paragraph names the cost of a pass that reads the store back. The
+    finished plate holds 29.4 million objects, and the verification pass in
+    #54 took 2.1 hours to read the audit and count them. The paragraph states
+    that zarrmony ships no such command, so the cost belongs to the wrapping
+    script.
+  - The flat rate of 0.30 is unchanged. The all-or-nothing warning is
+    unchanged, and the run confirms it.
+
+- **The 3456-scene plate convert is verified end to end** (#54). The 1.0.0
+  known-limitation entry below lists two open questions at full scale. Both
+  are now answered on real data, and the entry is superseded. No source
+  changed.
+  - A 1.6 TiB, 3456-scene plate convert finished. It ran for 138.5 hours on
+    one TITAN RTX and wrote 1.9 TiB over 29.4 million objects, with 0
+    validation warnings and 0 metadata warnings.
+  - `auto` held one engine decision across the whole plate. The audit recorded
+    `engine_used: [('gpu', None)]`. One pair means one decision, and the
+    `None` fallback reason means that no field fell back to the CPU.
+
 ## [1.0.0] — 2026-10-08
 
 First stable release. No file under `src/` changed since 0.3.2, so the reader

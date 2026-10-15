@@ -421,23 +421,49 @@ field of one well on a plate, and one position on a flat acquisition. Bytes
 per scene vary with the volume geometry, so a byte total predicts the clock
 badly.
 
-Measured on plate converts, one TITAN RTX, `traditional` mode, 16 cores,
-64 GiB, input on a network share (#44):
+Measured on plate converts, one TITAN RTX, `traditional` mode on the device,
+16 cores, 64 GiB, input on a network share. Each rate is the scene count
+divided by the convert duration that the same run reported:
 
-| plate | scenes per minute |
-| --- | --- |
-| 20 wells, 1 field per well, 3 channels | 0.54 |
-| 384 wells, 9 fields per well, 4 channels | 0.45 |
+| plate | scenes | convert | scenes per minute |
+| --- | --- | --- | --- |
+| 20 wells, 1 field per well, 3 channels | 20 | 37 min | 0.54 (#44) |
+| 384 wells, 9 fields per well, 4 channels | 3456 | 138.5 h | 0.42 (#54) |
 
-Use **0.45 scenes per minute** to size a plate. A 384-well plate with 9 fields
-per well holds 3456 scenes, so it needs 125 to 135 hours. Two jobs in #44 died
-on a time limit because the plan sized that plate from its 1.6 TiB instead.
+**Size a dense plate at 0.40 scenes per minute.** For 3456 scenes that gives
+144 hours. Round a measured rate down, never up. The whole-run mean of the one
+complete 3456-scene run was 0.42, and 0.42 predicts 137 hours, which is less
+than the 138.5 hours that same run took. A rate that predicts its own run too
+well leaves no margin for yours.
 
-Both rates come from plates. One large scene costs more than one plate field:
-the flat acquisition measured in #44 converted a single 1.8 GiB scene in
-200 s, which is 0.30 scenes per minute. Measure your own rate before a
-multi-day job. Start the convert, count the finished scene directories under
-the output store after an hour, and divide.
+Two earlier jobs died on a time limit, because the plan sized that plate from
+its 1.6 TiB instead (#44).
+
+Both table rates come from plates. One large scene costs more than one plate
+field: the flat acquisition measured in #44 converted a single 1.8 GiB scene
+in 200 s, which is 0.30 scenes per minute. The 20-well rate of 0.54 comes from
+a 37-minute run, so it shows nothing about a multi-day job. Size a sparse
+plate at 0.40 as well, unless you measure your own.
+
+**The rate holds for most of the run, then collapses.** On the complete run it
+stayed between 0.42 and 0.45 scenes per minute for the first 88 percent of the
+clock. Over the final 16 hours it fell to 0.27. The cause is not established.
+Plan for a last stretch that is slower than the rest.
+
+**An early sample over-states the rate.** The first 30 minutes of that run
+gave 0.467 scenes per minute, which predicts 123 hours against a true 138.5.
+Measure your own rate anyway, because your hardware and your share differ.
+Start the convert, count the finished scene directories under the output store
+after an hour, and divide. Then cut the result by 15 percent before you size
+the job. On the run above that method gives 0.397 and 145 hours, which covers
+the 142.2 hours the job used.
+
+**Add the time for any pass that reads the store back.** A finished
+3456-scene plate holds 29.4 million objects. After the convert, the run in #54
+spent 2.1 hours on its own verification pass, which read the audit and counted
+those objects. zarrmony ships no such command, so this cost belongs to the
+script that wraps the convert. The convert took 138.5 hours and the whole job
+took 142.2.
 
 **A plate convert is all-or-nothing.** zarrmony writes the plate audit once,
 after the last field. A job that the scheduler kills at the wall leaves a
